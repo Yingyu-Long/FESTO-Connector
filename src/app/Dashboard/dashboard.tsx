@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   IconAdd,
   IconExport,
@@ -9,17 +9,31 @@ import {
   IconRefresh,
 } from "@festo-ui/react-icons";
 import dashboardIcon from "../../assets/dashboards-icon.png";
+import { useNavigate } from "react-router-dom";
+import type { SavedConnection } from "../Add/storage";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
 
-const plcConnection = {
-  id: 12,
+const defaultConnection: SavedConnection = {
+  id: "12",
   protocol: "s7",
   host: "192.168.0.1",
-  port: 102,
+  port: "102",
   details: "remote-rack: 0, remote-slot: 1",
+  status: "disconnected",
 };
+
+function readConnections() {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem("festo-connections") ?? "[]",
+    ) as SavedConnection[];
+    return [defaultConnection, ...(Array.isArray(saved) ? saved : [])];
+  } catch {
+    return [defaultConnection];
+  }
+}
 
 function Action({
   icon,
@@ -51,8 +65,18 @@ export default function Dashboard() {
   const [page, setPage] = useState<Page>("Status");
   const [asset, setAsset] = useState<Asset>("MIP");
   const [assetsOpen, setAssetsOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
+  const [connections, setConnections] =
+    useState<SavedConnection[]>(readConnections);
+  const navigate = useNavigate();
+  useEffect(() => {
+    const refreshConnections = () => {
+      setConnections(readConnections());
+    };
+    window.addEventListener("storage", refreshConnections);
+    return () => window.removeEventListener("storage", refreshConnections);
+  }, []);
   const notify = (text: string) => {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 2200);
@@ -74,11 +98,6 @@ export default function Dashboard() {
                 >
                   <img src={dashboardIcon} alt="" />
                   <IconMenu aria-hidden="true" />
-                  <span
-                    className={`fwe-chevron ${assetsOpen ? "is-open" : ""}`}
-                  >
-                    ⌄
-                  </span>
                 </button>
                 {assetsOpen && (
                   <div className="fwe-assets-dropdown" role="menu">
@@ -116,7 +135,9 @@ export default function Dashboard() {
                 </button>
               ))}
             </nav>
-            <div className="fwe-festo-logo" aria-label="Festo" />
+            <div className="fwe-logo-container">
+              <div className="fwe-festo-logo" aria-label="Festo" />
+            </div>
           </div>
         </nav>
       </header>
@@ -146,7 +167,7 @@ export default function Dashboard() {
                   <Action
                     icon={<IconAdd aria-hidden="true" />}
                     label="Add PLC"
-                    onClick={() => notify("Add PLC connection")}
+                    onClick={() => navigate("/add")}
                   />
                 </div>
               </div>
@@ -165,48 +186,63 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className={expanded ? "fwe-expanded" : ""}>
-                      <td className="fwe-icon-cell">
-                        <button
-                          className={`fwe-expand ${expanded ? "is-expanded" : ""}`}
-                          type="button"
-                          aria-label="Toggle connection details"
-                          onClick={() => setExpanded(!expanded)}
-                        >
-                          ›
-                        </button>
-                      </td>
-                      <td>{plcConnection.id}</td>
-                      <td>{plcConnection.protocol}</td>
-                      <td>{plcConnection.host}</td>
-                      <td>{plcConnection.port}</td>
-                      <td>{plcConnection.details}</td>
-                      <td>
-                        <DisconnectedStatus />
-                      </td>
-                      <td className="fwe-menu-cell">
-                        <button
-                          className="fwe-icon-button"
-                          type="button"
-                          aria-label="PLC connection actions"
-                          onClick={() => notify("Connection actions")}
-                        >
-                          <IconMore />
-                        </button>
-                      </td>
-                    </tr>
-                    {expanded && (
-                      <tr className="fwe-details-row">
-                        <td colSpan={8}>
-                          <div className="fwe-details">
-                            <p className="fwe-details-message">
-                              No data blocks detected. This may be caused by a
-                              connection problem at the moment or a
-                              misconfiguration of the data block range.
-                            </p>
-                          </div>
+                    {connections.map((connection, index) => (
+                      <tr
+                        className={
+                          expandedIndex === index ? "fwe-expanded" : ""
+                        }
+                        key={`${connection.protocol}-${connection.id}-${index}`}
+                      >
+                        <td className="fwe-icon-cell">
+                          <button
+                            className={`fwe-expand ${expandedIndex === index ? "is-expanded" : ""}`}
+                            type="button"
+                            aria-label="Toggle connection details"
+                            onClick={() =>
+                              setExpandedIndex(
+                                expandedIndex === index ? null : index,
+                              )
+                            }
+                          >
+                            ›
+                          </button>
+                        </td>
+                        <td>{connection.id}</td>
+                        <td>{connection.protocol}</td>
+                        <td>{connection.host}</td>
+                        <td>{connection.port}</td>
+                        <td>{connection.details}</td>
+                        <td>
+                          <DisconnectedStatus />
+                        </td>
+                        <td className="fwe-menu-cell">
+                          <button
+                            className="fwe-icon-button"
+                            type="button"
+                            aria-label="PLC connection actions"
+                            onClick={() => notify("Connection actions")}
+                          >
+                            <IconMore />
+                          </button>
                         </td>
                       </tr>
+                    ))}
+                    {connections.map(
+                      (connection, index) =>
+                        expandedIndex === index && (
+                          <tr
+                            className="fwe-details-row"
+                            key={`${connection.protocol}-${connection.id}-${index}-details`}
+                          >
+                            <td colSpan={8}>
+                              <div className="fwe-details">
+                                <p className="fwe-details-message">
+                                  {connection.details}
+                                </p>
+                              </div>
+                            </td>
+                          </tr>
+                        ),
                     )}
                   </tbody>
                 </table>

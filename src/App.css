@@ -142,14 +142,18 @@
   background: var(--fwe-hero);
   content: "";
 }
-.fwe-festo-logo {
-  width: 120px;
-  height: 30px;
+.fwe-logo-container {
   margin: 0 0 20px auto;
-  background-image: url("assets/image.png"); /* 替换为真实的图片路径 */
+}
+.fwe-festo-logo {
+  width: 113px;
+  height: 20px;
+  background-image: url("./assets/image.png");
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
+  transform: scale(1.28);
+  transform-origin: center;
 }
 
 .fwe-navbar-spacer {
@@ -386,6 +390,116 @@ button:focus-visible {
   outline: 2px solid var(--fwe-hero);
   outline-offset: 2px;
 }
+.fwe-add-page {
+  min-height: 100vh;
+  padding: 112px 24px 48px;
+  background: var(--fwe-background);
+}
+.fwe-add-card {
+  display: grid;
+  grid-template-columns: minmax(0, 10fr) minmax(180px, 2fr);
+  gap: 24px;
+  max-width: 1200px;
+  min-height: 240px;
+  margin: 0 auto;
+  padding: 32px;
+  background: var(--fwe-white);
+}
+.fwe-add-form h1 {
+  margin: 0 0 32px;
+  font-size: 24px;
+  font-weight: 400;
+}
+.fwe-add-form label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.fwe-add-form select {
+  width: min(400px, 100%);
+  height: 42px;
+  border: 1px solid var(--fwe-control-border, #b6bec6);
+  padding: 0 12px;
+  color: var(--fwe-text);
+  background: var(--fwe-white);
+  font: inherit;
+}
+.fwe-add-form p {
+  margin: 8px 0 0;
+  color: var(--fwe-text-light);
+  font-size: 14px;
+}
+.fwe-add-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.fwe-add-actions button {
+  min-height: 48px;
+  border: 1px solid var(--fwe-control-border, #b6bec6);
+  color: var(--fwe-text);
+  background: var(--fwe-white);
+  font: inherit;
+  cursor: pointer;
+}
+.fwe-add-actions .fwe-save-button {
+  color: var(--fwe-white);
+  border-color: var(--fwe-hero);
+  background: var(--fwe-hero);
+}
+.fwe-add-actions button:disabled {
+  color: var(--fwe-text-light);
+  border-color: var(--fwe-control-disabled, #e2e5e8);
+  background: var(--fwe-control-disabled, #e2e5e8);
+  cursor: not-allowed;
+}
+.fwe-add-layout { display: grid; grid-template-columns: minmax(0, 10fr) minmax(180px, 2fr); gap: 24px; max-width: 1200px; min-height: 600px; margin: 0 auto; padding: 32px; background: var(--fwe-white); }
+.fwe-siemens-card { min-width: 0; }
+.fwe-siemens-card form { height: 100%; }
+.fwe-form-title, .fwe-data-heading { display: flex; align-items: center; margin-bottom: 32px; }
+.fwe-form-title h1, .fwe-data-heading h2 { margin: 0; font-size: 24px; font-weight: 400; }
+.fwe-form-title h1 span { text-transform: capitalize; }
+.fwe-info-button { display: inline-flex; margin-left: auto; border: 0; padding: 4px; color: var(--fwe-text); background: transparent; cursor: pointer; }
+.fwe-info-button:hover, .fwe-info-button:focus-visible { color: var(--fwe-hero); }
+.fwe-info-button svg { width: 18px; height: 18px; }
+.fwe-field { position: relative; display: inline-flex; flex-direction: column; vertical-align: top; min-width: 48px; }
+.fwe-field > span:first-child { order: 1; margin-bottom: 4px; font-size: 14px; }
+.fwe-field .fwe-input-wrap { position: relative; display: block; order: 2; }
+.fwe-field input, .fwe-field select { order: 2; height: 33px; border: 0; border-bottom: 1px solid var(--fwe-control-border, #b6bec6); border-radius: 0; padding: 0 4px; color: var(--fwe-text); background: transparent; font: inherit; outline: 0; }
+.fwe-field .fwe-input-wrap input { width: 100%; }
+.fwe-field .fwe-input-wrap b { position: absolute; right: 4px; bottom: 7px; color: var(--fwe-text-light); font-size: 14px; font-weight: 400; }
+.fwe-field input:focus, .fwe-field select:focus { border-bottom: 2px solid var(--fwe-hero); }
+.fwe-field > small { order: 3; min-height: 18px; margin-top: 4px; color: var(--fwe-text-light); font-size: 12px; }
+.fwe-field > em { order: 4; color: var(--fwe-red); font-size: 12px; font-style: normal; }
+.fwe-field.is-invalid .fwe-input-wrap input { border-bottom: 2px solid var(--fwe-red); }
+.fwe-field-id { width: 300px; margin-bottom: 30px; }
+.fwe-siemens-fields { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px 48px; margin-bottom: 16px; }
+.fwe-protocol-field { width: 100px; }
+.fwe-host-field { width: 300px; }
+.fwe-port-field { width: 100px; }
+.fwe-small-field { width: 48px; }
+.fwe-test-row { display: flex; align-items: center; min-height: 48px; margin-bottom: 40px; }
+.fwe-test-button, .fwe-add-more, .fwe-delete-button { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 8px 0; color: var(--fwe-text); background: transparent; font: inherit; cursor: pointer; }
+.fwe-test-button:hover, .fwe-test-button:focus-visible, .fwe-add-more:hover, .fwe-add-more:focus-visible { color: var(--fwe-hero); }
+.fwe-test-button svg, .fwe-add-more svg { width: 20px; height: 20px; }
+.fwe-connection-error { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-left: 24px; padding-left: 24px; border-left: 1px solid var(--fwe-gray-300); color: var(--fwe-red); font-size: 14px; }
+.fwe-connection-error svg { width: 16px; height: 16px; }
+.fwe-data-heading { margin-bottom: 12px; }
+.fwe-data-blocks { display: flex; flex-direction: column; gap: 16px; }
+.fwe-data-block-row { display: flex; align-items: flex-start; gap: 24px; }
+.fwe-block-field { width: 250px; }
+.fwe-polling-field { position: relative; width: 200px; }
+.fwe-polling-field input { padding-right: 24px; }
+.fwe-delete-button { margin-top: 22px; }
+.fwe-delete-button:disabled { color: var(--fwe-text-disabled, #b9babb); cursor: not-allowed; }
+.fwe-delete-button svg { width: 24px; height: 24px; }
+.fwe-siemens-actions { display: flex; flex-direction: column; gap: 16px; }
+.fwe-siemens-actions button { min-height: 48px; border: 1px solid var(--fwe-control-border, #b6bec6); color: var(--fwe-text); background: var(--fwe-white); font: inherit; cursor: pointer; }
+.fwe-siemens-actions .fwe-save-button,
+.fwe-siemens-actions .fwe-save-button.is-ready { color: var(--fwe-white); border-color: var(--fwe-hero); background: var(--fwe-hero); cursor: pointer; }
+.fwe-beckhoff-scan { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px 48px; margin-top: 24px; }
+.fwe-scan-help { max-width: 620px; margin: 8px 0 0; color: var(--fwe-text-light); font-size: 14px; }
+.fwe-opcua-auth { display: flex; flex-wrap: wrap; gap: 24px 48px; margin: 24px 0; }
 @media (min-width: 769px) {
   .fwe-main-content {
     padding-right: 26px;
@@ -416,6 +530,16 @@ button:focus-visible {
   .fwe-actions {
     flex-wrap: wrap;
   }
+  .fwe-add-layout {
+    grid-template-columns: 1fr;
+    padding: 24px;
+  }
+  .fwe-field-id,
+  .fwe-host-field,
+  .fwe-block-field,
+  .fwe-polling-field {
+    width: min(100%, 300px);
+  }
 }
 @media (max-width: 480px) {
   .fwe-navbar-inner {
@@ -423,6 +547,7 @@ button:focus-visible {
   }
   .fwe-assets-trigger {
     font-size: 14px;
+    margin-left: 10px;
   }
   .fwe-navlist {
     gap: 12px;
@@ -433,11 +558,28 @@ button:focus-visible {
   .fwe-festo-logo {
     width: 82px;
     height: 15px;
-    margin-bottom: 24px;
   }
   .fwe-main-content {
     padding-right: 16px;
     padding-left: 16px;
+  }
+  .fwe-add-page {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+  .fwe-add-card {
+    grid-template-columns: 1fr;
+    padding: 24px;
+  }
+  .fwe-add-layout { grid-template-columns: 1fr; padding: 24px; }
+  .fwe-siemens-actions { flex-direction: row; }
+  .fwe-siemens-actions button { flex: 1; }
+  .fwe-connection-error { margin-left: 12px; padding-left: 12px; }
+  .fwe-add-actions {
+    flex-direction: row;
+  }
+  .fwe-add-actions button {
+    flex: 1;
   }
   .fwe-details {
     padding: 24px;
