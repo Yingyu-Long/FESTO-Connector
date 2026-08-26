@@ -143,29 +143,15 @@
   content: "";
 }
 .fwe-festo-logo {
-  width: 113px;
-  height: 20px;
+  width: 120px;
+  height: 30px;
   margin: 0 0 20px auto;
-  background: var(--fwe-hero);
-  clip-path: polygon(
-    0 0,
-    18% 0,
-    18% 25%,
-    38% 25%,
-    38% 0,
-    58% 0,
-    58% 25%,
-    100% 25%,
-    100% 100%,
-    0 100%
-  );
+  background-image: url("assets/image.png"); /* 替换为真实的图片路径 */
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
 }
-.fwe-festo-logo::after {
-  display: block;
-  color: var(--fwe-hero);
-  content: "FESTO";
-  font-size: 0;
-}
+
 .fwe-navbar-spacer {
   height: 64px;
 }
