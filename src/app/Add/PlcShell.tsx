@@ -112,6 +112,7 @@ export function Field({
   invalid = false,
   help,
   suffix,
+  className,
 }: {
   label: string;
   value: string;
@@ -121,9 +122,10 @@ export function Field({
   invalid?: boolean;
   help?: string;
   suffix?: string;
+  className?: string;
 }) {
   return (
-    <label className={`fwe-field ${invalid ? "is-invalid" : ""}`}>
+    <label className={`fwe-field ${className ?? ""} ${invalid ? "is-invalid" : ""}`}>
       <span>
         {label}
         {required ? " *" : ""}
@@ -148,15 +150,17 @@ export function SelectField({
   onChange,
   options,
   required = true,
+  className,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: string[];
   required?: boolean;
+  className?: string;
 }) {
   return (
-    <label className="fwe-field">
+    <label className={`fwe-field ${className ?? ""}`}>
       <span>
         {label}
         {required ? " *" : ""}

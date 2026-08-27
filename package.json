@@ -13,6 +13,8 @@
     "@festo-ui/icon-font": "^3.0.0",
     "@festo-ui/react": "^11.1.0",
     "@festo-ui/web-essentials": "^11.1.0",
+    "mqtt": "^5.15.2",
+    "node-snap7": "^1.0.9",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router": "^8.3.0",

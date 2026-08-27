@@ -17,6 +17,11 @@ import type { SavedConnection } from "../Add/storage";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
+type MqttSummary = {
+  protocol: string;
+  host: string;
+  port: string;
+};
 const editPaths: Record<string, string> = {
   s7: "/add/siemens",
   eip: "/add/rockwell",
@@ -27,13 +32,31 @@ const downloadsUrl =
   "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
 
 const defaultConnection: SavedConnection = {
-  id: "12",
+  id: "PLC id",
   protocol: "s7",
-  host: "192.168.0.1",
-  port: "102",
+  host: "hostname",
+  port: "port",
   details: "remote-rack: 0, remote-slot: 1",
   status: "disconnected",
 };
+
+function readMqttSummary(): MqttSummary | null {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem("festo-mqtt-config") ?? "null",
+    ) as Partial<MqttSummary> | null;
+    if (!saved || typeof saved.host !== "string" || typeof saved.port !== "string") {
+      return null;
+    }
+    return {
+      protocol: typeof saved.protocol === "string" ? saved.protocol : "tcp://",
+      host: saved.host,
+      port: saved.port,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function readConnections() {
   try {
@@ -87,6 +110,9 @@ export default function Dashboard() {
     connection: SavedConnection;
   } | null>(null);
   const [notice, setNotice] = useState("");
+  const [mqttSummary, setMqttSummary] = useState<MqttSummary | null>(
+    readMqttSummary,
+  );
   const [connections, setConnections] =
     useState<SavedConnection[]>(readConnections);
   const navigate = useNavigate();
@@ -95,7 +121,12 @@ export default function Dashboard() {
       setConnections(readConnections());
     };
     window.addEventListener("storage", refreshConnections);
-    return () => window.removeEventListener("storage", refreshConnections);
+    const refreshMqtt = () => setMqttSummary(readMqttSummary());
+    window.addEventListener("storage", refreshMqtt);
+    return () => {
+      window.removeEventListener("storage", refreshConnections);
+      window.removeEventListener("storage", refreshMqtt);
+    };
   }, []);
   const notify = (text: string) => {
     setNotice(text);
@@ -131,7 +162,7 @@ export default function Dashboard() {
           <div className="fwe-navbar-inner">
             <nav className="fwe-navlist" aria-label="Main navigation">
               <div className="fwe-assets-menu">
-                          <button
+                <button
                   className="fwe-dashboard-link"
                   type="button"
                   aria-label="Go to Dashboard"
@@ -282,30 +313,30 @@ export default function Dashboard() {
                               className="fwe-icon-button"
                               type="button"
                               aria-label="PLC connection actions"
-                            onClick={() =>
-                              setOpenMenuIndex(
-                                openMenuIndex === index ? null : index,
-                              )
-                            }
-                          >
-                            <IconMore />
-                          </button>
-                          {openMenuIndex === index && (
-                            <div className="fwe-row-menu" role="menu">
+                              onClick={() =>
+                                setOpenMenuIndex(
+                                  openMenuIndex === index ? null : index,
+                                )
+                              }
+                            >
+                              <IconMore />
+                            </button>
+                            {openMenuIndex === index && (
+                              <div className="fwe-row-menu" role="menu">
                                 <button
                                   type="button"
                                   role="menuitem"
                                   className="fwe-menu-edit"
                                   onClick={() => {
-                                  const path = editPaths[connection.protocol];
-                                  if (path) {
-                                    navigate(path, {
-                                      state: { connection },
-                                    });
-                                  } else {
-                                    notify("This PLC type cannot be edited");
-                                  }
-                                  setOpenMenuIndex(null);
+                                    const path = editPaths[connection.protocol];
+                                    if (path) {
+                                      navigate(path, {
+                                        state: { connection },
+                                      });
+                                    } else {
+                                      notify("This PLC type cannot be edited");
+                                    }
+                                    setOpenMenuIndex(null);
                                   }}
                                 >
                                   <IconEdit aria-hidden="true" />
@@ -334,8 +365,8 @@ export default function Dashboard() {
                                   <IconUpdate aria-hidden="true" />
                                   Rescan
                                 </button>
-                            </div>
-                          )}
+                              </div>
+                            )}
                           </td>
                         </tr>
                         {expandedIndex === index && (
@@ -375,18 +406,23 @@ export default function Dashboard() {
                     <tr>
                       <td className="fwe-icon-cell" />
                       <td>12</td>
-                      <td>tcp://192.168.0.1:12</td>
+                      <td>
+                        {mqttSummary
+                          ? `${mqttSummary.protocol}${mqttSummary.host}:${mqttSummary.port}`
+                          : "tcp://192.168.0.1:12"}
+                      </td>
                       <td>
                         <DisconnectedStatus />
                       </td>
                       <td className="fwe-menu-cell">
                         <button
-                          className="fwe-icon-button"
+                          className="fwe-edit-link"
                           type="button"
-                          aria-label="MQTT connection actions"
-                          onClick={() => notify("Connection actions")}
+                          aria-label="Edit MQTT connection"
+                          onClick={() => navigate("/mqtt")}
                         >
-                          <IconMore />
+                          <IconEdit aria-hidden="true" />
+                          Edit
                         </button>
                       </td>
                     </tr>
@@ -441,15 +477,14 @@ export default function Dashboard() {
               type="button"
               aria-label="Close"
               onClick={() => setDeleteTarget(null)}
-            >
-              ×
-            </button>
+            ></button>
             <div className="fwe-modal-header">
               <h2>PLC Connections</h2>
               <h1 id="delete-plc-title">Delete PLC?</h1>
             </div>
             <div className="fwe-modal-body">
-              Do you want to delete &quot;{deleteTarget.connection.id}&quot; permanently?
+              Do you want to delete &quot;{deleteTarget.connection.id}&quot;
+              permanently?
             </div>
             <div className="fwe-modal-footer">
               <button

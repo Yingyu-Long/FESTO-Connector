@@ -448,6 +448,25 @@
 .fwe-icon-button:focus-visible {
   color: var(--fwe-hero);
 }
+.fwe-edit-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 8px 0;
+  color: var(--fwe-text);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.fwe-edit-link svg {
+  width: 18px;
+  height: 18px;
+}
+.fwe-edit-link:hover,
+.fwe-edit-link:focus-visible {
+  color: var(--fwe-hero);
+}
 .fwe-status {
   display: inline-flex;
   align-items: center;
@@ -722,6 +741,47 @@ button:focus-visible {
   align-items: flex-start;
   gap: 24px 48px;
   margin-bottom: 16px;
+}
+.fwe-mqtt-layout {
+  min-height: 560px;
+}
+.fwe-mqtt-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 24px 48px;
+  margin-bottom: 24px;
+}
+.fwe-mqtt-secondary-fields {
+  margin-bottom: 32px;
+}
+.fwe-mqtt-auth {
+  margin: 0 0 24px;
+  padding: 16px 0 0;
+  border: 0;
+}
+.fwe-mqtt-auth legend {
+  margin-bottom: 16px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.fwe-mqtt-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+.fwe-mqtt-radio-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.fwe-mqtt-radio-group input {
+  accent-color: var(--fwe-hero);
+}
+.fwe-mqtt-credentials {
+  margin-top: 24px;
+  margin-bottom: 0;
 }
 .fwe-protocol-field {
   width: 100px;
