@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { saveConnection } from "./storage";
+import { configString, saveConnection } from "./storage";
+import type { SavedConnection } from "./storage";
 
 type DataBlock = {
   id: number;
@@ -10,17 +11,29 @@ type DataBlock = {
   polling: string;
 };
 
+function isDataBlock(value: unknown): value is DataBlock {
+  if (typeof value !== "object" || value === null) return false;
+  const dataBlock = value as Partial<DataBlock>;
+  return typeof dataBlock.id === "number" && typeof dataBlock.dataBlock === "string" && typeof dataBlock.polling === "string";
+}
+
 export default function Siemens() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
+  const savedBlocks = editConnection?.config?.dataBlocks;
   const [values, setValues] = useState({
-    id: "",
-    host: "",
-    port: "102",
-    rack: "0",
-    slot: "1",
+    id: editConnection?.id ?? "",
+    host: editConnection?.host ?? "",
+    port: configString(editConnection, "port", editConnection?.port ?? "102"),
+    rack: configString(editConnection, "rack", "0"),
+    slot: configString(editConnection, "slot", "1"),
   });
   const [dataBlocks, setDataBlocks] = useState<DataBlock[]>([
-    { id: 0, dataBlock: "", polling: "" },
+    ...(Array.isArray(savedBlocks) ? savedBlocks.filter(isDataBlock) : []),
+    ...(!Array.isArray(savedBlocks) || savedBlocks.filter(isDataBlock).length === 0
+      ? [{ id: 0, dataBlock: "", polling: "" }]
+      : []),
   ]);
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
@@ -46,11 +59,14 @@ export default function Siemens() {
     if (!valid) return;
     saveConnection({
       id: values.id,
+      recordId: editConnection?.recordId,
       protocol: "s7",
       host: values.host,
       port: values.port,
       details: `remote-rack: ${values.rack}, remote-slot: ${values.slot}, data-blocks: ${dataBlocks.map((item) => `${item.dataBlock}, polling: ${item.polling} ms`).join("; ")}`,
       status: "disconnected",
+      editPath: "/add/siemens",
+      config: { ...values, dataBlocks },
     });
     navigate("/dashboard");
   };

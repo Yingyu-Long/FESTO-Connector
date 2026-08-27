@@ -1,12 +1,15 @@
 import { Fragment, useEffect, useState } from "react";
 import {
   IconAdd,
+  IconDelete,
+  IconEdit,
   IconExport,
   IconFailure,
   IconMore,
   IconMenu,
   IconReinitialize,
   IconRefresh,
+  IconUpdate,
 } from "@festo-ui/react-icons";
 import dashboardIcon from "../../assets/dashboards-icon.png";
 import { useNavigate } from "react-router-dom";
@@ -14,6 +17,12 @@ import type { SavedConnection } from "../Add/storage";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
+const editPaths: Record<string, string> = {
+  s7: "/add/siemens",
+  eip: "/add/rockwell",
+  ads: "/add/beckhoff",
+  "opc.tcp": "/add/opcua",
+};
 const downloadsUrl =
   "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
 
@@ -31,7 +40,11 @@ function readConnections() {
     const saved = JSON.parse(
       localStorage.getItem("festo-connections") ?? "[]",
     ) as SavedConnection[];
-    return [defaultConnection, ...(Array.isArray(saved) ? saved : [])];
+    const defaultRows =
+      localStorage.getItem("festo-default-connection-hidden") === "true"
+        ? []
+        : [defaultConnection];
+    return [...defaultRows, ...(Array.isArray(saved) ? saved : [])];
   } catch {
     return [defaultConnection];
   }
@@ -68,6 +81,11 @@ export default function Dashboard() {
   const [asset, setAsset] = useState<Asset>("MIP");
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [openMenuIndex, setOpenMenuIndex] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    index: number;
+    connection: SavedConnection;
+  } | null>(null);
   const [notice, setNotice] = useState("");
   const [connections, setConnections] =
     useState<SavedConnection[]>(readConnections);
@@ -83,6 +101,28 @@ export default function Dashboard() {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 2200);
   };
+  const deleteConnection = (index: number, connection: SavedConnection) => {
+    try {
+      if (connection === defaultConnection) {
+        localStorage.setItem("festo-default-connection-hidden", "true");
+        setConnections(readConnections());
+        setExpandedIndex(null);
+        notify("Connection deleted");
+        return;
+      }
+      const saved = JSON.parse(
+        localStorage.getItem("festo-connections") ?? "[]",
+      ) as SavedConnection[];
+      const defaultVisible = connections[0] === defaultConnection;
+      saved.splice(index - (defaultVisible ? 1 : 0), 1);
+      localStorage.setItem("festo-connections", JSON.stringify(saved));
+      setConnections(readConnections());
+      setExpandedIndex(null);
+      notify("Connection deleted");
+    } catch {
+      notify("Unable to delete connection");
+    }
+  };
 
   return (
     <div className="fwe-app">
@@ -91,7 +131,7 @@ export default function Dashboard() {
           <div className="fwe-navbar-inner">
             <nav className="fwe-navlist" aria-label="Main navigation">
               <div className="fwe-assets-menu">
-                <button
+                          <button
                   className="fwe-dashboard-link"
                   type="button"
                   aria-label="Go to Dashboard"
@@ -229,7 +269,11 @@ export default function Dashboard() {
                           <td>{connection.protocol}</td>
                           <td>{connection.host}</td>
                           <td>{connection.port}</td>
-                          <td>{connection.details}</td>
+                          <td className="fwe-connection-details">
+                            <span className="fwe-connection-details-content">
+                              {connection.details}
+                            </span>
+                          </td>
                           <td>
                             <DisconnectedStatus />
                           </td>
@@ -238,10 +282,60 @@ export default function Dashboard() {
                               className="fwe-icon-button"
                               type="button"
                               aria-label="PLC connection actions"
-                              onClick={() => notify("Connection actions")}
-                            >
-                              <IconMore />
-                            </button>
+                            onClick={() =>
+                              setOpenMenuIndex(
+                                openMenuIndex === index ? null : index,
+                              )
+                            }
+                          >
+                            <IconMore />
+                          </button>
+                          {openMenuIndex === index && (
+                            <div className="fwe-row-menu" role="menu">
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="fwe-menu-edit"
+                                  onClick={() => {
+                                  const path = editPaths[connection.protocol];
+                                  if (path) {
+                                    navigate(path, {
+                                      state: { connection },
+                                    });
+                                  } else {
+                                    notify("This PLC type cannot be edited");
+                                  }
+                                  setOpenMenuIndex(null);
+                                  }}
+                                >
+                                  <IconEdit aria-hidden="true" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="fwe-menu-delete"
+                                  onClick={() => {
+                                    setDeleteTarget({ index, connection });
+                                    setOpenMenuIndex(null);
+                                  }}
+                                >
+                                  <IconDelete aria-hidden="true" />
+                                  Delete
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    notify(`Rescanning PLC ${connection.id}`);
+                                    setOpenMenuIndex(null);
+                                  }}
+                                >
+                                  <IconUpdate aria-hidden="true" />
+                                  Rescan
+                                </button>
+                            </div>
+                          )}
                           </td>
                         </tr>
                         {expandedIndex === index && (
@@ -327,6 +421,56 @@ export default function Dashboard() {
       {notice && (
         <div className="fwe-snackbar" role="status">
           {notice}
+        </div>
+      )}
+      {deleteTarget && (
+        <div
+          className="fwe-modal-backdrop"
+          role="presentation"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            className="fwe-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-plc-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="fwe-modal-close"
+              type="button"
+              aria-label="Close"
+              onClick={() => setDeleteTarget(null)}
+            >
+              ×
+            </button>
+            <div className="fwe-modal-header">
+              <h2>PLC Connections</h2>
+              <h1 id="delete-plc-title">Delete PLC?</h1>
+            </div>
+            <div className="fwe-modal-body">
+              Do you want to delete &quot;{deleteTarget.connection.id}&quot; permanently?
+            </div>
+            <div className="fwe-modal-footer">
+              <button
+                className="fwe-modal-cancel"
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="fwe-modal-confirm"
+                type="button"
+                onClick={() => {
+                  deleteConnection(deleteTarget.index, deleteTarget.connection);
+                  setDeleteTarget(null);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

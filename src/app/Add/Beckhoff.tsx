@@ -1,22 +1,25 @@
 import { useState } from "react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { saveConnection } from "./storage";
+import { configString, saveConnection } from "./storage";
+import type { SavedConnection } from "./storage";
 
 export default function Beckhoff() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
   const [values, setValues] = useState({
-    id: "",
-    host: "",
-    port: "48898",
-    targetNetId: "",
-    targetPort: "851",
-    sourceNetId: "",
-    sourcePort: "32905",
-    polling: "500",
+    id: editConnection?.id ?? "",
+    host: editConnection?.host ?? "",
+    port: configString(editConnection, "port", editConnection?.port ?? "48898"),
+    targetNetId: configString(editConnection, "targetNetId", ""),
+    targetPort: configString(editConnection, "targetPort", "851"),
+    sourceNetId: configString(editConnection, "sourceNetId", ""),
+    sourcePort: configString(editConnection, "sourcePort", "32905"),
+    polling: configString(editConnection, "polling", "500"),
   });
-  const [mode, setMode] = useState("Automatic");
+  const [mode, setMode] = useState(configString(editConnection, "mode", "Automatic"));
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
@@ -35,12 +38,15 @@ export default function Beckhoff() {
     setSubmitted(true);
     if (!valid) return;
     saveConnection({
+      recordId: editConnection?.recordId,
       id: values.id,
       protocol: "ads",
       host: values.host,
       port: values.port,
       details: `target-net-id: ${values.targetNetId}, target-port: ${values.targetPort}, source-net-id: ${values.sourceNetId}, source-port: ${values.sourcePort}, mode: ${mode}, polling: ${values.polling} ms`,
       status: "disconnected",
+      editPath: "/add/beckhoff",
+      config: { ...values, mode },
     });
     navigate("/dashboard");
   };

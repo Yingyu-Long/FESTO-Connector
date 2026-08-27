@@ -1,21 +1,24 @@
 import { useState } from "react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { saveConnection } from "./storage";
+import { configString, saveConnection } from "./storage";
+import type { SavedConnection } from "./storage";
 
 export default function Opcua() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
   const [values, setValues] = useState({
-    id: "",
-    host: "",
-    port: "4840",
-    server: "",
-    username: "",
-    password: "",
+    id: editConnection?.id ?? "",
+    host: editConnection?.host ?? "",
+    port: configString(editConnection, "port", editConnection?.port ?? "4840"),
+    server: configString(editConnection, "server", ""),
+    username: configString(editConnection, "username", ""),
+    password: configString(editConnection, "password", ""),
   });
-  const [securityMode, setSecurityMode] = useState("NONE_MODE");
-  const [authType, setAuthType] = useState("None");
+  const [securityMode, setSecurityMode] = useState(configString(editConnection, "securityMode", "NONE_MODE"));
+  const [authType, setAuthType] = useState(configString(editConnection, "authType", "None"));
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
@@ -30,12 +33,15 @@ export default function Opcua() {
     setSubmitted(true);
     if (!valid) return;
     saveConnection({
+      recordId: editConnection?.recordId,
       id: values.id,
       protocol: "opc.tcp",
       host: values.host,
       port: values.port,
       details: `server: ${values.server || "default"}, security: ${securityMode}, authentication: ${authType}`,
       status: "disconnected",
+      editPath: "/add/opcua",
+      config: { ...values, securityMode, authType },
     });
     navigate("/dashboard");
   };

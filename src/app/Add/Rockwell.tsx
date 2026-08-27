@@ -1,22 +1,24 @@
 import { useState } from "react";
 import { IconConnected, IconFailure, IconPlus } from "@festo-ui/react-icons";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { saveConnection } from "./storage";
+import { configString, saveConnection } from "./storage";
 import type { SavedConnection } from "./storage";
 
 export default function Rockwell() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
   const [values, setValues] = useState({
-    id: "",
-    host: "",
-    port: "44818",
-    backplane: "0",
-    slot: "0",
-    dataBlock: "",
-    polling: "",
+    id: editConnection?.id ?? "",
+    host: editConnection?.host ?? "",
+    port: configString(editConnection, "port", editConnection?.port ?? "44818"),
+    backplane: configString(editConnection, "backplane", "0"),
+    slot: configString(editConnection, "slot", "0"),
+    dataBlock: configString(editConnection, "dataBlock", ""),
+    polling: configString(editConnection, "polling", ""),
   });
-  const [endian, setEndian] = useState("Little-Endian");
+  const [endian, setEndian] = useState(configString(editConnection, "endian", "Little-Endian"));
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const [rows, setRows] = useState([0]);
@@ -35,12 +37,15 @@ export default function Rockwell() {
     setSubmitted(true);
     if (!valid) return;
     const connection: SavedConnection = {
+      recordId: editConnection?.recordId,
       id: values.id,
       protocol: "eip",
       host: values.host,
       port: values.port,
       details: `backplane: ${values.backplane}, slot: ${values.slot}, endian: ${endian}, data-blocks: ${values.dataBlock}, polling: ${values.polling} ms`,
       status: "disconnected",
+      editPath: "/add/rockwell",
+      config: { ...values, endian },
     };
     saveConnection(connection);
     navigate("/dashboard");
