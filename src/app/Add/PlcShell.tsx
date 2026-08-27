@@ -5,7 +5,8 @@ import dashboardIcon from "../../assets/dashboards-icon.png";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
-const downloadsUrl = "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
+const downloadsUrl =
+  "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
 
 export function PlcShell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
@@ -34,13 +35,20 @@ export function PlcShell({ children }: { children: React.ReactNode }) {
             <nav className="fwe-navlist" aria-label="Main navigation">
               <div className="fwe-assets-menu">
                 <button
+                  className="fwe-dashboard-link"
+                  type="button"
+                  aria-label="Go to Dashboard"
+                  onClick={() => navigate("/dashboard")}
+                >
+                  <img src={dashboardIcon} alt="Dashboard" />
+                </button>
+                <button
                   className="fwe-assets-trigger"
                   type="button"
                   aria-expanded={assetsOpen}
                   aria-label="Open asset menu"
                   onClick={() => setAssetsOpen(!assetsOpen)}
                 >
-                  <img src={dashboardIcon} alt="" />
                   <IconMenu aria-hidden="true" />
                 </button>
                 {assetsOpen && (

@@ -27,7 +27,27 @@
   position: relative;
   display: flex;
   align-items: stretch;
+  gap: 12px;
   margin-right: 24px;
+}
+.fwe-dashboard-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  height: 64px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.fwe-dashboard-link img {
+  width: 27px;
+  height: 27px;
+  object-fit: contain;
+}
+.fwe-dashboard-link:hover,
+.fwe-dashboard-link:focus-visible {
+  filter: brightness(0.88);
 }
 .fwe-assets-trigger {
   display: flex;
@@ -41,11 +61,6 @@
   font: inherit;
   font-size: 16px;
   cursor: pointer;
-}
-.fwe-assets-trigger img {
-  width: 27px;
-  height: 27px;
-  object-fit: contain;
 }
 .fwe-assets-trigger svg {
   width: 20px;
