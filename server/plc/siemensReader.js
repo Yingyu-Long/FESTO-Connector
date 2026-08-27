@@ -27,17 +27,6 @@ export function parseDataBlockRange(range) {
   return Array.from({ length: last - first + 1 }, (_, index) => first + index);
 }
 
-function decodeField(buffer, field) {
-  if (field.type === "REAL") return buffer.readFloatBE(field.offset);
-  if (field.type === "INT") return buffer.readInt16BE(field.offset);
-  if (field.type === "DINT") return buffer.readInt32BE(field.offset);
-  if (field.type === "UINT") return buffer.readUInt16BE(field.offset);
-  if (field.type === "BOOL") {
-    return Boolean(buffer[field.offset] & (1 << Number(field.bit ?? 0)));
-  }
-  return null;
-}
-
 async function readOneDataBlock(client, blockNumber, blockConfig) {
   const size =
     Number(blockConfig.size ?? 0) ||
@@ -57,22 +46,12 @@ async function readOneDataBlock(client, blockNumber, blockConfig) {
     Number(blockConfig.start ?? 0),
     size,
   ]);
-  const values = {};
-
-  for (const field of blockConfig.fields ?? []) {
-    try {
-      values[field.name] = decodeField(buffer, field);
-    } catch {
-      values[field.name] = null;
-    }
-  }
-
   return {
-    dbNumber: blockNumber,
+    dataBlock: blockNumber,
     start: Number(blockConfig.start ?? 0),
     size,
-    raw: buffer.toString("base64"),
-    values,
+    encoding: "base64",
+    rawData: buffer.toString("base64"),
   };
 }
 
@@ -96,7 +75,7 @@ export async function readSiemensData(client, config) {
         blocks.push(await readOneDataBlock(client, blockNumber, blockConfig));
       } catch (error) {
         errors.push({
-          dbNumber: blockNumber,
+          dataBlock: blockNumber,
           message:
             error instanceof Error ? error.message : "Data block read failed",
         });
@@ -107,7 +86,7 @@ export async function readSiemensData(client, config) {
   return {
     plcId: config.id,
     timestamp: Date.now(),
-    values: blocks,
+    dataBlocks: blocks,
     quality:
       errors.length === 0 ? "good" : blocks.length > 0 ? "partial" : "bad",
     errors,
