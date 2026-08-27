@@ -14,6 +14,7 @@ import type { SavedConnection } from "../Add/storage";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
+const downloadsUrl = "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
 
 const defaultConnection: SavedConnection = {
   id: "12",
@@ -129,7 +130,13 @@ export default function Dashboard() {
                   key={item}
                   type="button"
                   className={page === item ? "fwe-active" : ""}
-                  onClick={() => setPage(item)}
+                  onClick={() => {
+                    if (item === "Downloads") {
+                      window.location.assign(downloadsUrl);
+                      return;
+                    }
+                    setPage(item);
+                  }}
                 >
                   {item}
                 </button>

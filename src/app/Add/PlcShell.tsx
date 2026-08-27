@@ -5,6 +5,7 @@ import dashboardIcon from "../../assets/dashboards-icon.png";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
+const downloadsUrl = "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
 
 export function PlcShell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
@@ -17,6 +18,10 @@ export function PlcShell({ children }: { children: React.ReactNode }) {
     if (item === "MIP") navigate("/dashboard");
   };
   const goToPage = (item: Page) => {
+    if (item === "Downloads") {
+      window.location.assign(downloadsUrl);
+      return;
+    }
     setPage(item);
     if (item === "Status") navigate("/dashboard");
   };
