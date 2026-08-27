@@ -56,6 +56,10 @@ export default function Mqtt() {
   const [authType, setAuthType] = useState(savedConfig.authType);
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
+  const [connectionState, setConnectionState] = useState<
+    "idle" | "checking" | "connected" | "disconnected"
+  >("idle");
+  const [connectionMessage, setConnectionMessage] = useState("");
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const valid = Boolean(
@@ -63,12 +67,63 @@ export default function Mqtt() {
     values.port &&
     (authType === "None" || (values.username && values.password)),
   );
-  const save = () => {
+  const checkConnection = async () => {
+    if (!valid) {
+      setSubmitted(true);
+      setConnectionState("disconnected");
+      return false;
+    }
+
+    setConnectionState("checking");
+    setConnectionMessage("");
+    try {
+      const response = await fetch("/api/mqtt/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...values,
+          protocol: "tcp://",
+          port: Number(values.port),
+          qos,
+          authType,
+        }),
+      });
+      const result = (await response.json()) as {
+        connected?: boolean;
+        error?: string;
+      };
+      const connected = response.ok && result.connected === true;
+      setConnectionState(connected ? "connected" : "disconnected");
+      setConnectionMessage(
+        connected
+          ? ""
+          : result.error ?? "The MQTT broker rejected the connection.",
+      );
+      return connected;
+    } catch (error) {
+      setConnectionState("disconnected");
+      setConnectionMessage(
+        error instanceof TypeError
+          ? "The backend is not running. Start it with npm run server:dev."
+          : "Unable to reach the MQTT connection service.",
+      );
+      return false;
+    }
+  };
+
+  const save = async () => {
     setSubmitted(true);
     if (!valid) return;
+    const connected = await checkConnection();
     localStorage.setItem(
       "festo-mqtt-config",
-      JSON.stringify({ ...values, protocol: "tcp://", qos, authType }),
+      JSON.stringify({
+        ...values,
+        protocol: "tcp://",
+        qos,
+        authType,
+        status: connected ? "connected" : "disconnected",
+      }),
     );
     navigate("/dashboard");
   };
@@ -168,15 +223,31 @@ export default function Mqtt() {
               <button
                 type="button"
                 className="fwe-test-button"
-                onClick={() => setTested(true)}
+                onClick={async () => {
+                  setTested(true);
+                  await checkConnection();
+                }}
+                disabled={connectionState === "checking"}
               >
                 <IconConnected />
-                Test connection
+                {connectionState === "checking" ? "Testing connection..." : "Test connection"}
               </button>
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />
                   Please fill out all required fields correctly.
+                </div>
+              )}
+              {tested && valid && connectionState === "connected" && (
+                <div className="fwe-connection-success">
+                  <IconConnected />
+                  Connected
+                </div>
+              )}
+              {tested && valid && connectionState === "disconnected" && (
+                <div className="fwe-connection-error">
+                  <IconFailure />
+                  {connectionMessage || "Unable to connect. Check the server and broker settings."}
                 </div>
               )}
             </div>

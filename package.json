@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "server:dev": "node --watch server/index.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -13,6 +15,9 @@
     "@festo-ui/icon-font": "^3.0.0",
     "@festo-ui/react": "^11.1.0",
     "@festo-ui/web-essentials": "^11.1.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "mqtt": "^5.15.2",
     "node-snap7": "^1.0.9",
     "react": "^19.2.8",
@@ -25,6 +30,8 @@
     "@eslint/js": "^10.0.1",
     "@rolldown/plugin-babel": "^0.2.3",
     "@types/babel__core": "^7.20.5",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
@@ -37,6 +44,7 @@
     "globals": "^17.11.0",
     "postcss": "^8.5.26",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.67.0",
     "vite": "^8.2.2"

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import {
   IconAdd,
+  IconCheckStatus,
   IconDelete,
   IconEdit,
   IconExport,
@@ -21,6 +22,7 @@ type MqttSummary = {
   protocol: string;
   host: string;
   port: string;
+  status: "connected" | "disconnected";
 };
 const editPaths: Record<string, string> = {
   s7: "/add/siemens",
@@ -52,6 +54,7 @@ function readMqttSummary(): MqttSummary | null {
       protocol: typeof saved.protocol === "string" ? saved.protocol : "tcp://",
       host: saved.host,
       port: saved.port,
+      status: saved.status === "connected" ? "connected" : "disconnected",
     };
   } catch {
     return null;
@@ -90,7 +93,16 @@ function Action({
   );
 }
 
-function DisconnectedStatus() {
+function ConnectionStatus({ status }: { status: SavedConnection["status"] }) {
+  if (status === "connected") {
+    return (
+      <span className="fwe-status fwe-status-connected">
+        <IconCheckStatus aria-hidden="true" />
+        Connected
+      </span>
+    );
+  }
+
   return (
     <span className="fwe-status">
       <IconFailure aria-hidden="true" />
@@ -306,7 +318,7 @@ export default function Dashboard() {
                             </span>
                           </td>
                           <td>
-                            <DisconnectedStatus />
+                            <ConnectionStatus status={connection.status} />
                           </td>
                           <td className="fwe-menu-cell">
                             <button
@@ -412,7 +424,7 @@ export default function Dashboard() {
                           : "tcp://192.168.0.1:12"}
                       </td>
                       <td>
-                        <DisconnectedStatus />
+                        <ConnectionStatus status={mqttSummary?.status ?? "disconnected"} />
                       </td>
                       <td className="fwe-menu-cell">
                         <button

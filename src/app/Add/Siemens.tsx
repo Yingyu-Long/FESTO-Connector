@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { IconConnected, IconFailure } from "@festo-ui/react-icons";
+import { IconCheckStatus, IconConnected, IconFailure } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, saveConnection } from "./storage";
@@ -37,6 +37,7 @@ export default function Siemens() {
   ]);
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<SavedConnection["status"]>("disconnected");
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const setDataBlock =
@@ -54,9 +55,54 @@ export default function Siemens() {
     values.slot &&
     dataBlocks.every((item) => item.dataBlock && item.polling),
   );
-  const save = () => {
+  const buildBackendConfig = () => {
+    let mqtt: Record<string, unknown> | undefined;
+    try {
+      const savedMqtt = JSON.parse(
+        localStorage.getItem("festo-mqtt-config") ?? "null",
+      ) as Record<string, unknown> | null;
+      if (savedMqtt && typeof savedMqtt.host === "string" && savedMqtt.host) {
+        mqtt = savedMqtt;
+      }
+    } catch {
+      mqtt = undefined;
+    }
+
+    return {
+      id: values.id,
+      host: values.host,
+      port: Number(values.port),
+      rack: Number(values.rack),
+      slot: Number(values.slot),
+      polling: Number(dataBlocks[0]?.polling ?? 500),
+      dataBlocks: dataBlocks.map((item) => ({
+        range: item.dataBlock,
+        polling: Number(item.polling),
+      })),
+      mqtt,
+      mqttTopic: `festo/plc/${values.id}`,
+    };
+  };
+  const connectToBackend = async () => {
+    try {
+      const response = await fetch("/api/plcs/siemens/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildBackendConfig()),
+      });
+      const result = (await response.json()) as { connected?: boolean };
+      const status = response.ok && result.connected ? "connected" : "disconnected";
+      setConnectionStatus(status);
+      return status;
+    } catch {
+      setConnectionStatus("disconnected");
+      return "disconnected" as const;
+    }
+  };
+  const save = async () => {
     setSubmitted(true);
     if (!valid) return;
+    const status = await connectToBackend();
     saveConnection({
       id: values.id,
       recordId: editConnection?.recordId,
@@ -64,7 +110,7 @@ export default function Siemens() {
       host: values.host,
       port: values.port,
       details: `remote-rack: ${values.rack}, remote-slot: ${values.slot}, data-blocks: ${dataBlocks.map((item) => `${item.dataBlock}, polling: ${item.polling} ms`).join("; ")}`,
-      status: "disconnected",
+      status,
       editPath: "/add/siemens",
       config: { ...values, dataBlocks },
     });
@@ -123,7 +169,10 @@ export default function Siemens() {
               <button
                 type="button"
                 className="fwe-test-button"
-                onClick={() => setTested(true)}
+                onClick={async () => {
+                  setTested(true);
+                  if (valid) await connectToBackend();
+                }}
               >
                 <IconConnected />
                 Test connection
@@ -133,6 +182,12 @@ export default function Siemens() {
                   <IconFailure />
                   Please fill out all required fields correctly.
                 </div>
+              )}
+              {tested && valid && connectionStatus === "connected" && (
+                <span className="fwe-status fwe-status-connected">
+                  <IconCheckStatus />
+                  Connected
+                </span>
               )}
             </div>
             <div className="fwe-data-heading">

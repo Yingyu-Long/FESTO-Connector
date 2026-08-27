@@ -477,6 +477,12 @@
   height: 16px;
   color: var(--fwe-red);
 }
+.fwe-status-connected {
+  color: var(--fwe-green, #80ca3d);
+}
+.fwe-status-connected svg {
+  color: var(--fwe-green, #80ca3d);
+}
 .fwe-details-row td {
   height: auto;
   padding: 0 !important;

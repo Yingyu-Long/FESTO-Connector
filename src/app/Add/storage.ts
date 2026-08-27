@@ -5,7 +5,7 @@ export interface SavedConnection {
   host: string;
   port: string;
   details: string;
-  status: "disconnected";
+  status: "connected" | "disconnected" | "error";
   editPath?: string;
   config?: Record<string, unknown>;
 }
