@@ -3,8 +3,9 @@ import mqtt from "mqtt";
 const clients = new Map();
 
 function getMqttUrl(config) {
-  const protocol =
-    config.protocol === "tcp://" ? "mqtt://" : (config.protocol ?? "mqtt://");
+  const protocol = ["tcp://", "tcp:", "mqtt://", "mqtt:"].includes(config.protocol)
+    ? "mqtt://"
+    : (config.protocol ?? "mqtt://");
   return `${protocol}${config.host}:${config.port}`;
 }
 

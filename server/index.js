@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import "dotenv/config";
+import { query } from "./database.js";
 import { testMqttConnection } from "./mqttPublisher.js";
 import { startSiemensPoller, stopSiemensPoller } from "./plc/poller.js";
 
@@ -10,8 +11,123 @@ const port = Number(process.env.PORT ?? 3001);
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-app.get("/api/health", (_request, response) => {
-  response.json({ ok: true });
+app.get("/api/health", async (_request, response) => {
+  try {
+    await query("SELECT 1");
+    response.json({ ok: true, database: true });
+  } catch (error) {
+    console.error("Database health check failed", error);
+    response.status(503).json({
+      ok: false,
+      database: false,
+      error: error instanceof Error ? error.message : "Database unavailable",
+    });
+  }
+});
+
+function isConnectorConfiguration(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof value.id === "string" &&
+      Array.isArray(value.messageSources) &&
+      value.mqttMessageHandler &&
+      typeof value.mqttMessageHandler === "object",
+  );
+}
+
+app.get("/api/configuration", async (_request, response) => {
+  try {
+    const result = await query(
+      `
+      SELECT configuration
+      FROM connector_configurations
+      ORDER BY updated_at DESC
+      LIMIT 1
+      `,
+    );
+    response.json(result.rows[0]?.configuration ?? null);
+  } catch (error) {
+    console.error("Unable to load configuration", error);
+    response.status(500).json({ error: "Unable to load configuration" });
+  }
+});
+
+app.put("/api/configuration", async (request, response) => {
+  const configuration = request.body;
+
+  if (!isConnectorConfiguration(configuration)) {
+    response.status(400).json({ error: "Invalid connector configuration" });
+    return;
+  }
+
+  try {
+    await query(
+      `
+      INSERT INTO connector_configurations
+        (id, configuration, updated_at)
+      VALUES
+        ($1, $2::jsonb, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET
+        configuration = EXCLUDED.configuration,
+        updated_at = NOW()
+      `,
+      [configuration.id, JSON.stringify(configuration)],
+    );
+    response.json({ saved: true, id: configuration.id });
+  } catch (error) {
+    console.error("Unable to save configuration", error);
+    response.status(500).json({ error: "Unable to save configuration" });
+  }
+});
+
+app.delete("/api/configuration/message-sources/:uniqueKey", async (request, response) => {
+  try {
+    const result = await query(
+      `
+      UPDATE connector_configurations
+      SET
+        configuration = jsonb_set(
+          configuration,
+          '{messageSources}',
+          COALESCE(
+            (
+              SELECT jsonb_agg(source)
+              FROM jsonb_array_elements(configuration->'messageSources') AS source
+              WHERE source->>'uniqueKey' <> $1
+            ),
+            '[]'::jsonb
+          ),
+          true
+        ),
+        updated_at = NOW()
+      WHERE id = (
+        SELECT id
+        FROM connector_configurations
+        ORDER BY updated_at DESC
+        LIMIT 1
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(configuration->'messageSources') AS source
+        WHERE source->>'uniqueKey' = $1
+      )
+      RETURNING configuration
+      `,
+      [request.params.uniqueKey],
+    );
+
+    if (result.rowCount === 0) {
+      response.status(404).json({ error: "Message source not found" });
+      return;
+    }
+
+    response.json({ deleted: true, configuration: result.rows[0].configuration });
+  } catch (error) {
+    console.error("Unable to delete message source", error);
+    response.status(500).json({ error: "Unable to delete message source" });
+  }
 });
 
 app.post("/api/mqtt/connect", async (request, response) => {

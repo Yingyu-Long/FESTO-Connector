@@ -2,6 +2,7 @@ import { useState } from "react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
 import { useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
+import { saveCurrentConfiguration } from "../configurationApi";
 
 type MqttConfig = {
   host: string;
@@ -125,6 +126,7 @@ export default function Mqtt() {
         status: connected ? "connected" : "disconnected",
       }),
     );
+    await saveCurrentConfiguration();
     navigate("/dashboard");
   };
 

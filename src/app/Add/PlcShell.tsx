@@ -180,21 +180,42 @@ export function FormActions({
   onCancel,
 }: {
   valid: boolean;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
   onCancel: () => void;
 }) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const handleSave = async () => {
+    if (saving) return;
+    setSaveError("");
+    setSaving(true);
+    try {
+      await onSave();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save configuration");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <aside className="fwe-siemens-actions">
       <button
         type="button"
         className={`fwe-save-button ${valid ? "is-ready" : ""}`}
-        onClick={onSave}
+        onClick={() => void handleSave()}
+        disabled={saving}
       >
-        Save
+        {saving ? "Saving..." : "Save"}
       </button>
       <button type="button" onClick={onCancel}>
         Cancel
       </button>
+      {saveError && (
+        <div className="fwe-save-error" role="alert">
+          {saveError}
+        </div>
+      )}
     </aside>
   );
 }

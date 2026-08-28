@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, saveConnection } from "./storage";
 import type { SavedConnection } from "./storage";
+import { saveCurrentConfiguration } from "../configurationApi";
 
 export default function Rockwell() {
   const location = useLocation();
@@ -37,7 +38,7 @@ export default function Rockwell() {
     values.dataBlock &&
     values.polling,
   );
-  const save = () => {
+  const save = async () => {
     setSubmitted(true);
     if (!valid) return;
     const connection: SavedConnection = {
@@ -52,6 +53,7 @@ export default function Rockwell() {
       config: { ...values, endian },
     };
     saveConnection(connection);
+    await saveCurrentConfiguration();
     navigate("/dashboard");
   };
   return (

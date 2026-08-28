@@ -14,8 +14,15 @@ import {
 } from "@festo-ui/react-icons";
 import dashboardIcon from "../../assets/dashboards-icon.png";
 import { useNavigate } from "react-router-dom";
+import { deduplicateConnections } from "../Add/storage";
 import type { SavedConnection } from "../Add/storage";
 import ImportPage from "../Import";
+import { buildConfiguration } from "../configuration";
+import {
+  deleteConfigurationSource,
+  loadConfiguration,
+} from "../configurationApi";
+import { prepareConfiguration } from "../configurationImport";
 
 type Page = "Status" | "Import" | "Downloads";
 type Asset = "MIP" | "ENI" | "MIE";
@@ -51,8 +58,9 @@ function readMqttSummary(): MqttSummary | null {
     if (!saved || typeof saved.host !== "string" || typeof saved.port !== "string") {
       return null;
     }
+    const protocol = saved.protocol === "tcp:" ? "tcp://" : saved.protocol;
     return {
-      protocol: typeof saved.protocol === "string" ? saved.protocol : "tcp://",
+      protocol: typeof protocol === "string" ? protocol : "tcp://",
       host: saved.host,
       port: saved.port,
       status: saved.status === "connected" ? "connected" : "disconnected",
@@ -60,6 +68,21 @@ function readMqttSummary(): MqttSummary | null {
   } catch {
     return null;
   }
+}
+
+function prepareDatabaseConfiguration(configuration: unknown) {
+  const prepared = prepareConfiguration(configuration);
+  const previous = readMqttSummary();
+  const sameMqttConnection =
+    previous &&
+    previous.host === prepared.mqttConfig.host &&
+    previous.port === prepared.mqttConfig.port;
+
+  if (sameMqttConnection) {
+    prepared.mqttConfig.status = previous.status;
+  }
+
+  return prepared;
 }
 
 function readConnections() {
@@ -71,134 +94,18 @@ function readConnections() {
       localStorage.getItem("festo-default-connection-hidden") === "true"
         ? []
         : [defaultConnection];
-    return [...defaultRows, ...(Array.isArray(saved) ? saved : [])];
+    return [
+      ...defaultRows,
+      ...(Array.isArray(saved) ? deduplicateConnections(saved) : []),
+    ];
   } catch {
     return [defaultConnection];
   }
 }
 
-function readJsonStorage(key: string) {
-  try {
-    return JSON.parse(localStorage.getItem(key) ?? "null") as Record<string, unknown> | null;
-  } catch {
-    return null;
-  }
-}
-
-function getConfigurationId() {
-  const stored = localStorage.getItem("festo-configuration-id");
-  if (stored) return stored;
-
-  const id = crypto.randomUUID();
-  localStorage.setItem("festo-configuration-id", id);
-  return id;
-}
-
-function getConnectionUri(connection: SavedConnection) {
-  const config = connection.config ?? {};
-  const protocol = connection.protocol === "opc.tcp" ? "opc.tcp://" : `${connection.protocol}://`;
-  const baseUri = `${protocol}${connection.host}:${connection.port}`;
-
-  if (connection.protocol === "s7") {
-    const params = new URLSearchParams({
-      "remote-rack": String(config.rack ?? "0"),
-      "remote-slot": String(config.slot ?? "1"),
-    });
-    return `${baseUri}?${params}`;
-  }
-
-  if (connection.protocol === "ads") {
-    const params = new URLSearchParams({
-      targetAmsPort: String(config.targetPort ?? "851"),
-      sourceAmsPort: String(config.sourcePort ?? "32905"),
-      targetAmsNetId: String(config.targetNetId ?? ""),
-      sourceAmsNetId: String(config.sourceNetId ?? ""),
-    });
-    return `${baseUri}?${params}`;
-  }
-
-  return baseUri;
-}
-
-function getMessageSourceConfiguration(connection: SavedConnection) {
-  const config = connection.config ?? {};
-
-  if (connection.protocol === "s7") {
-    const dataBlocks = Array.isArray(config.dataBlocks) ? config.dataBlocks : [];
-    const dbs = dataBlocks
-      .map((item) => {
-        if (typeof item !== "object" || item === null) return "";
-        const block = item as Record<string, unknown>;
-        const range = String(block.dataBlock ?? block.range ?? "");
-        const size = block.size;
-        return range && size ? `${range}:${size}` : range;
-      })
-      .filter(Boolean)
-      .join(",");
-    const firstBlock = dataBlocks[0];
-    const polling =
-      typeof firstBlock === "object" && firstBlock !== null
-        ? (firstBlock as Record<string, unknown>).polling
-        : undefined;
-
-    return {
-      s7PniConfiguration: {
-        dbs,
-        defaultPollingRate: String(polling ?? config.polling ?? "500"),
-      },
-    };
-  }
-
-  if (connection.protocol === "ads") {
-    const automatic = config.mode === "Automatic";
-    return {
-      beckhoffConfiguration: {
-        fbs: `${String(config.targetNetId ?? "")}:${String(config.targetPort ?? "")}`,
-        defaultPollingRate: String(config.polling ?? "500"),
-        scanMode: automatic ? "auto" : "custom",
-        scanAllOthers: automatic,
-        defaultPollingRateForAllOthers: String(config.polling ?? "500"),
-      },
-    };
-  }
-
-  return { configuration: config };
-}
-
-function buildExportConfiguration(connections: SavedConnection[]) {
-  const mqtt = readJsonStorage("festo-mqtt-config") ?? {};
-  const messageSources = connections.filter((connection) => connection !== defaultConnection).map((connection) => ({
-    id: connection.id,
-    uri: getConnectionUri(connection),
-    uniqueKey: connection.recordId ?? `${connection.protocol}-${connection.id}`,
-    ...getMessageSourceConfiguration(connection),
-  }));
-  const mqttUri = `${String(mqtt.protocol ?? "tcp://")}${String(mqtt.host ?? "")}:${String(mqtt.port ?? "1883")}`;
-  const mqttAuthentication =
-    mqtt.authType === "Basic Authentication"
-      ? {
-          basicAuthentication: {
-            username: String(mqtt.username ?? ""),
-            password: String(mqtt.password ?? ""),
-          },
-        }
-      : { anonymousAuthentication: {} };
-
-  return {
-    messageSources,
-    mqttMessageHandler: {
-      clientId: String(mqtt.clientId ?? ""),
-      uri: mqttUri,
-      qos: Number(mqtt.qos ?? 1),
-      ...mqttAuthentication,
-    },
-    id: getConfigurationId(),
-  };
-}
-
 function downloadConfiguration(connections: SavedConnection[]) {
   const blob = new Blob(
-    [JSON.stringify(buildExportConfiguration(connections), null, 4)],
+    [JSON.stringify(buildConfiguration(connections.filter((connection) => connection !== defaultConnection)), null, 4)],
     { type: "application/json" },
   );
   const url = URL.createObjectURL(blob);
@@ -268,6 +175,27 @@ export default function Dashboard() {
     window.addEventListener("storage", refreshConnections);
     const refreshMqtt = () => setMqttSummary(readMqttSummary());
     window.addEventListener("storage", refreshMqtt);
+    void loadConfiguration()
+      .then((configuration) => {
+        if (!configuration || !Array.isArray(configuration.messageSources)) return;
+        const prepared = prepareDatabaseConfiguration(configuration);
+        const uniqueConnections = deduplicateConnections(prepared.connections);
+        localStorage.setItem(
+          "festo-connections",
+          JSON.stringify(uniqueConnections),
+        );
+        localStorage.setItem(
+          "festo-mqtt-config",
+          JSON.stringify(prepared.mqttConfig),
+        );
+        localStorage.setItem("festo-default-connection-hidden", "true");
+        if (typeof configuration.id === "string") {
+          localStorage.setItem("festo-configuration-id", configuration.id);
+        }
+        setConnections(readConnections());
+        setMqttSummary(readMqttSummary());
+      })
+      .catch((error) => console.error("Unable to load database configuration", error));
     return () => {
       window.removeEventListener("storage", refreshConnections);
       window.removeEventListener("storage", refreshMqtt);
@@ -277,7 +205,7 @@ export default function Dashboard() {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 2200);
   };
-  const deleteConnection = (index: number, connection: SavedConnection) => {
+  const deleteConnection = async (index: number, connection: SavedConnection) => {
     try {
       if (connection === defaultConnection) {
         localStorage.setItem("festo-default-connection-hidden", "true");
@@ -290,6 +218,8 @@ export default function Dashboard() {
         localStorage.getItem("festo-connections") ?? "[]",
       ) as SavedConnection[];
       const defaultVisible = connections[0] === defaultConnection;
+      const uniqueKey = connection.recordId ?? `${connection.protocol}-${connection.id}`;
+      await deleteConfigurationSource(uniqueKey);
       saved.splice(index - (defaultVisible ? 1 : 0), 1);
       localStorage.setItem("festo-connections", JSON.stringify(saved));
       setConnections(readConnections());
@@ -398,7 +328,33 @@ export default function Dashboard() {
                   <Action
                     icon={<IconRefresh aria-hidden="true" />}
                     label="Refresh"
-                    onClick={() => notify("Connections refreshed")}
+                    onClick={async () => {
+                      try {
+                        const configuration = await loadConfiguration();
+                        if (configuration) {
+                          const prepared = prepareDatabaseConfiguration(configuration);
+                          localStorage.setItem(
+                            "festo-connections",
+                            JSON.stringify(deduplicateConnections(prepared.connections)),
+                          );
+                          localStorage.setItem(
+                            "festo-mqtt-config",
+                            JSON.stringify(prepared.mqttConfig),
+                          );
+                          if (typeof configuration.id === "string") {
+                            localStorage.setItem("festo-configuration-id", configuration.id);
+                          }
+                        } else {
+                          localStorage.setItem("festo-connections", "[]");
+                          localStorage.removeItem("festo-mqtt-config");
+                        }
+                        setConnections(readConnections());
+                        setMqttSummary(readMqttSummary());
+                        notify("Configuration refreshed");
+                      } catch (error) {
+                        notify(error instanceof Error ? error.message : "Unable to refresh configuration");
+                      }
+                    }}
                   />
                   <Action
                     icon={<IconExport aria-hidden="true" />}

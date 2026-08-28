@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, saveConnection } from "./storage";
 import type { SavedConnection } from "./storage";
+import { saveCurrentConfiguration } from "../configurationApi";
 
 type DataBlock = {
   id: number;
@@ -116,6 +117,7 @@ export default function Siemens() {
       editPath: "/add/siemens",
       config: { ...values, dataBlocks },
     });
+    await saveCurrentConfiguration();
     navigate("/dashboard");
   };
   return (

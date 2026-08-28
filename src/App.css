@@ -954,11 +954,22 @@ button:focus-visible {
   font: inherit;
   cursor: pointer;
 }
+.fwe-test-button {
+  min-height: 40px;
+  border: 1px solid var(--fwe-gray-400);
+  padding: 8px 16px;
+  background: var(--fwe-white);
+}
 .fwe-test-button:hover,
 .fwe-test-button:focus-visible,
 .fwe-add-more:hover,
 .fwe-add-more:focus-visible {
   color: var(--fwe-hero);
+}
+.fwe-test-button:hover,
+.fwe-test-button:focus-visible {
+  border-color: var(--fwe-hero);
+  background: var(--fwe-gray-100);
 }
 .fwe-test-button svg,
 .fwe-add-more svg {
@@ -1026,6 +1037,14 @@ button:focus-visible {
   background: var(--fwe-white);
   font: inherit;
   cursor: pointer;
+}
+.fwe-save-error {
+  max-width: 220px;
+  padding: 12px;
+  color: var(--fwe-red);
+  background: var(--fwe-red-bg);
+  font-size: 14px;
+  line-height: 1.35;
 }
 .fwe-siemens-actions .fwe-save-button,
 .fwe-siemens-actions .fwe-save-button.is-ready {

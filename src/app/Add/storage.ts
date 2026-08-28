@@ -15,10 +15,20 @@ function readSavedConnections() {
     const saved = JSON.parse(
       localStorage.getItem("festo-connections") ?? "[]",
     ) as SavedConnection[];
-    return Array.isArray(saved) ? saved : [];
+    return Array.isArray(saved) ? deduplicateConnections(saved) : [];
   } catch {
     return [];
   }
+}
+
+export function deduplicateConnections(connections: SavedConnection[]) {
+  const seen = new Set<string>();
+  return connections.filter((connection) => {
+    const key = `${connection.protocol}:${connection.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function saveConnection(connection: SavedConnection) {

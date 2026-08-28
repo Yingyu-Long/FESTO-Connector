@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, saveConnection } from "./storage";
 import type { SavedConnection } from "./storage";
+import { saveCurrentConfiguration } from "../configurationApi";
 
 export default function Opcua() {
   const location = useLocation();
@@ -29,7 +30,7 @@ export default function Opcua() {
     values.port &&
     (authType === "None" || (values.username && values.password)),
   );
-  const save = () => {
+  const save = async () => {
     setSubmitted(true);
     if (!valid) return;
     saveConnection({
@@ -43,6 +44,7 @@ export default function Opcua() {
       editPath: "/add/opcua",
       config: { ...values, securityMode, authType },
     });
+    await saveCurrentConfiguration();
     navigate("/dashboard");
   };
   return (
