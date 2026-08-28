@@ -9,6 +9,7 @@ type DataBlock = {
   id: number;
   dataBlock: string;
   polling: string;
+  size?: string;
 };
 
 function isDataBlock(value: unknown): value is DataBlock {
@@ -78,6 +79,7 @@ export default function Siemens() {
       dataBlocks: dataBlocks.map((item) => ({
         range: item.dataBlock,
         polling: Number(item.polling),
+        ...(item.size ? { size: Number(item.size) } : {}),
       })),
       mqtt,
       mqttTopic: `festo/plc/${values.id}`,

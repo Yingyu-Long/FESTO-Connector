@@ -8,7 +8,9 @@ import type { SavedConnection } from "./storage";
 export default function Rockwell() {
   const location = useLocation();
   const navigate = useNavigate();
-  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
+  const editConnection = (
+    location.state as { connection?: SavedConnection } | null
+  )?.connection;
   const [values, setValues] = useState({
     id: editConnection?.id ?? "",
     host: editConnection?.host ?? "",
@@ -18,7 +20,9 @@ export default function Rockwell() {
     dataBlock: configString(editConnection, "dataBlock", ""),
     polling: configString(editConnection, "polling", ""),
   });
-  const [endian, setEndian] = useState(configString(editConnection, "endian", "Little-Endian"));
+  const [endian, setEndian] = useState(
+    configString(editConnection, "endian", "Little-Endian"),
+  );
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const [rows, setRows] = useState([0]);

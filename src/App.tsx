@@ -1,6 +1,8 @@
 import "@festo-ui/icon-font/icons.css";
 import "./App.css";
+import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import dashboardIcon from "./assets/dashboards-icon.png";
 import Dashboard from "./app/Dashboard/dashboard";
 import Add from "./app/Add/Add";
 import Siemens from "./app/Add/Siemens";
@@ -10,6 +12,11 @@ import Beckhoff from "./app/Add/Beckhoff";
 import Mqtt from "./app/Add/Mqtt";
 
 export default function App() {
+  useEffect(() => {
+    const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (favicon) favicon.href = dashboardIcon;
+  }, []);
+
   return (
     <BrowserRouter>
       <Routes>
