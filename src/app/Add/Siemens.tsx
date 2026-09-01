@@ -190,8 +190,14 @@ export default function Siemens() {
               )}
               {tested && valid && connectionStatus === "connected" && (
                 <span className="fwe-status fwe-status-connected">
-                  <IconCheckStatus />
+                  <IconCheckStatus aria-hidden="true" />
                   Connected
+                </span>
+              )}
+              {tested && valid && connectionStatus === "disconnected" && (
+                <span className="fwe-status">
+                  <IconFailure aria-hidden="true" />
+                  Connection failed
                 </span>
               )}
             </div>

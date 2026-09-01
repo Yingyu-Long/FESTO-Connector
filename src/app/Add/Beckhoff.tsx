@@ -23,6 +23,7 @@ export default function Beckhoff() {
   const [mode, setMode] = useState(configString(editConnection, "mode", "Automatic"));
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
+  const [connectionFailed, setConnectionFailed] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const valid = Boolean(
@@ -118,7 +119,10 @@ export default function Beckhoff() {
                 type="button"
                 className="fwe-btn no-wrap"
                 aria-label="Test connection"
-                onClick={() => setTested(true)}
+                onClick={() => {
+                  setTested(true);
+                  setConnectionFailed(valid);
+                }}
               >
                 <IconConnected />
                 Test connection
@@ -128,6 +132,12 @@ export default function Beckhoff() {
                   <IconFailure />
                   Please fill out all required fields correctly.
                 </div>
+              )}
+              {connectionFailed && (
+                <span className="fwe-status">
+                  <IconFailure aria-hidden="true" />
+                  Connection failed
+                </span>
               )}
             </div>
             <div className="fwe-beckhoff-scan">

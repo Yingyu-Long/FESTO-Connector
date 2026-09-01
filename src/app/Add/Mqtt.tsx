@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { IconConnected, IconFailure } from "@festo-ui/react-icons";
+import { IconCheckStatus, IconConnected, IconFailure } from "@festo-ui/react-icons";
 import { useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { saveCurrentConfiguration } from "../configurationApi";
@@ -242,16 +242,16 @@ export default function Mqtt() {
                 </div>
               )}
               {tested && valid && connectionState === "connected" && (
-                <div className="fwe-connection-success">
-                  <IconConnected />
+                <span className="fwe-status fwe-status-connected">
+                  <IconCheckStatus aria-hidden="true" />
                   Connected
-                </div>
+                </span>
               )}
               {tested && valid && connectionState === "disconnected" && (
-                <div className="fwe-connection-error">
-                  <IconFailure />
-                  {connectionMessage || "Unable to connect. Check the server and broker settings."}
-                </div>
+                <span className="fwe-status" title={connectionMessage}>
+                  <IconFailure aria-hidden="true" />
+                  Connection failed
+                </span>
               )}
             </div>
           </form>

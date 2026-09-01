@@ -26,6 +26,7 @@ export default function Rockwell() {
   );
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
+  const [connectionFailed, setConnectionFailed] = useState(false);
   const [rows, setRows] = useState([0]);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -118,6 +119,7 @@ export default function Rockwell() {
                 aria-label="Test connection"
                 onClick={() => {
                   setTested(true);
+                  setConnectionFailed(valid);
                 }}
               >
                 <IconConnected />
@@ -128,6 +130,12 @@ export default function Rockwell() {
                   <IconFailure />
                   Please fill out all required fields correctly.
                 </div>
+              )}
+              {connectionFailed && (
+                <span className="fwe-status">
+                  <IconFailure aria-hidden="true" />
+                  Connection failed
+                </span>
               )}
             </div>
             <div className="fwe-data-heading">
