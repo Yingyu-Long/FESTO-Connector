@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button } from "@festo-ui/react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
@@ -64,32 +65,39 @@ export default function Opcua() {
               invalid={submitted && !values.id}
               help="Please type in an Id for this PLC"
             />
-            <div className="fwe-siemens-fields">
+            <div className="fwe-opcua-connection-fields">
               <SelectField
+                className="fwe-opcua-protocol-field"
                 label="Protocol"
                 value="opc.tcp://"
                 onChange={() => undefined}
                 options={["opc.tcp://"]}
               />
               <Field
+                className="fwe-opcua-host-field"
                 label="Hostname or IP"
                 value={values.host}
                 onChange={set("host")}
                 invalid={submitted && !values.host}
               />
               <Field
+                className="fwe-opcua-port-field"
                 label="Port"
                 value={values.port}
                 onChange={set("port")}
                 invalid={submitted && !values.port}
               />
               <Field
+                className="fwe-opcua-server-field"
                 label="OPC UA Server Name"
                 required={false}
                 value={values.server}
                 onChange={set("server")}
               />
+            </div>
+            <div className="fwe-opcua-security-fields">
               <SelectField
+                className="fwe-opcua-security-mode-field"
                 label="Message Security Mode"
                 value={securityMode}
                 onChange={setSecurityMode}
@@ -97,14 +105,30 @@ export default function Opcua() {
               />
             </div>
             <div className="fwe-opcua-auth">
-              <SelectField
-                label="Authentication"
-                value={authType}
-                onChange={setAuthType}
-                options={["None", "Basic Authentication"]}
-              />
+              <div className="fwe-opcua-auth-options" role="radiogroup" aria-label="Authentication">
+                <label>
+                  <input
+                    type="radio"
+                    name="opcua-authentication"
+                    value="None"
+                    checked={authType === "None"}
+                    onChange={(event) => setAuthType(event.target.value)}
+                  />
+                  None
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="opcua-authentication"
+                    value="Basic Authentication"
+                    checked={authType === "Basic Authentication"}
+                    onChange={(event) => setAuthType(event.target.value)}
+                  />
+                  Basic Authentication
+                </label>
+              </div>
               {authType === "Basic Authentication" && (
-                <>
+                <div className="fwe-opcua-credentials">
                   <Field
                     label="Username"
                     value={values.username}
@@ -118,24 +142,18 @@ export default function Opcua() {
                     onChange={set("password")}
                     invalid={submitted && !values.password}
                   />
-                </>
+                </div>
               )}
             </div>
             <div className="fwe-test-row">
               <button
                 type="button"
-                className="fwe-test-button"
+                className="fwe-btn no-wrap"
+                aria-label="Test connection"
                 onClick={() => setTested(true)}
               >
                 <IconConnected />
                 Test connection
-              </button>
-              <button
-                type="button"
-                className="fwe-test-button"
-                disabled={!tested}
-              >
-                Browse Nodes
               </button>
               {tested && !valid && (
                 <div className="fwe-connection-error">
@@ -144,6 +162,23 @@ export default function Opcua() {
                 </div>
               )}
             </div>
+            <section className="fwe-opcua-browse" aria-labelledby="opcua-browse-heading">
+              <h2 id="opcua-browse-heading">Browse Nodes</h2>
+              {tested && !valid && (
+                <div className="fwe-opcua-error-ribbon" role="alert">
+                  <IconFailure />
+                  Please fill in all required fields to continue.
+                </div>
+              )}
+              <p>You can browse nodes after a successful connection test.</p>
+              <Button
+                type="button"
+                disabled
+                title="OPC UA node browsing is not implemented by the backend yet"
+              >
+                Start Browsing
+              </Button>
+            </section>
           </form>
         </section>
         <FormActions

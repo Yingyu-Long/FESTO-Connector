@@ -172,7 +172,8 @@ export default function Siemens() {
             <div className="fwe-test-row">
               <button
                 type="button"
-                className="fwe-test-button"
+                className="fwe-btn no-wrap"
+                aria-label="Test connection"
                 onClick={async () => {
                   setTested(true);
                   if (valid) await connectToBackend();

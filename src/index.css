@@ -21,7 +21,9 @@
   --fwe-background: #f0f2f3;
   --fwe-gray-200: #e2e5e8;
   --fwe-gray-300: #d3d8dd;
+  --fwe-gray-400: #b6bec6;
   --fwe-red: #d50000;
+  --fwe-text-disabled: #b9babb;
   --fwe-border: #d3d8dd;
   --fwe-font-family-sans-serif: "Festo", "Trebuchet MS", Arial, sans-serif;
   font-family: var(--fwe-font-family-sans-serif);
