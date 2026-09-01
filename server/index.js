@@ -28,11 +28,11 @@ app.get("/api/health", async (_request, response) => {
 function isConnectorConfiguration(value) {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      typeof value.id === "string" &&
-      Array.isArray(value.messageSources) &&
-      value.mqttMessageHandler &&
-      typeof value.mqttMessageHandler === "object",
+    typeof value === "object" &&
+    typeof value.id === "string" &&
+    Array.isArray(value.messageSources) &&
+    value.mqttMessageHandler &&
+    typeof value.mqttMessageHandler === "object",
   );
 }
 
@@ -82,10 +82,12 @@ app.put("/api/configuration", async (request, response) => {
   }
 });
 
-app.delete("/api/configuration/message-sources/:uniqueKey", async (request, response) => {
-  try {
-    const result = await query(
-      `
+app.delete(
+  "/api/configuration/message-sources/:uniqueKey",
+  async (request, response) => {
+    try {
+      const result = await query(
+        `
       UPDATE connector_configurations
       SET
         configuration = jsonb_set(
@@ -115,20 +117,24 @@ app.delete("/api/configuration/message-sources/:uniqueKey", async (request, resp
       )
       RETURNING configuration
       `,
-      [request.params.uniqueKey],
-    );
+        [request.params.uniqueKey],
+      );
 
-    if (result.rowCount === 0) {
-      response.status(404).json({ error: "Message source not found" });
-      return;
+      if (result.rowCount === 0) {
+        response.status(404).json({ error: "Message source not found" });
+        return;
+      }
+
+      response.json({
+        deleted: true,
+        configuration: result.rows[0].configuration,
+      });
+    } catch (error) {
+      console.error("Unable to delete message source", error);
+      response.status(500).json({ error: "Unable to delete message source" });
     }
-
-    response.json({ deleted: true, configuration: result.rows[0].configuration });
-  } catch (error) {
-    console.error("Unable to delete message source", error);
-    response.status(500).json({ error: "Unable to delete message source" });
-  }
-});
+  },
+);
 
 app.post("/api/mqtt/connect", async (request, response) => {
   try {
