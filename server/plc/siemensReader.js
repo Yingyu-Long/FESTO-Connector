@@ -1,13 +1,7 @@
 import snap7 from "node-snap7";
 //snap 7 client wrapper to use promises instead of callbacks
 
-/**
- * Calls a method on the Snap7 client and returns a promise.
- * @param {Object} client - The Snap7 client instance.
- * @param {string} methodName - The name of the method to call.
- * @param {Array} argumentsList - The arguments for the method call.
- * @returns {Promise} A promise resolving to the result of the method call or rejecting with an error.
- */
+//
 function callClient(client, methodName, argumentsList) {
   return new Promise((resolve, reject) => {
     let callbackCalled = false;
@@ -24,6 +18,7 @@ function callClient(client, methodName, argumentsList) {
   });
 }
 
+//get the range of data blocks to read based on the configuration
 export function parseDataBlockRange(range) {
   const match = String(range ?? "")
     .trim()

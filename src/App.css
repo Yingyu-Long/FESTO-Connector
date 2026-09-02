@@ -868,7 +868,8 @@ button:focus-visible {
   font-size: 12px;
   font-style: normal;
 }
-.fwe-field.is-invalid .fwe-input-wrap input {
+.fwe-field.is-invalid .fwe-input-wrap input,
+.fwe-field.is-invalid select {
   border-bottom: 2px solid var(--fwe-red);
 }
 .fwe-field-id {
@@ -1102,10 +1103,52 @@ button:focus-visible {
 }
 .fwe-opcua-security-fields {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  gap: 24px 48px;
 }
-.fwe-opcua-security-mode-field {
+.fwe-opcua-security-mode-field,
+.fwe-opcua-security-policy-field {
   width: 250px;
+}
+.fwe-opcua-certificates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px 48px;
+  margin-top: 24px;
+}
+.fwe-opcua-certificate-field {
+  width: 300px;
+}
+.fwe-file-input-wrap {
+  min-height: 33px;
+  border-bottom: 1px solid var(--fwe-control-border, #b6bec6);
+}
+.fwe-file-input-wrap > span {
+  display: block;
+  min-height: 33px;
+  padding: 6px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fwe-file-input-wrap > span.is-placeholder {
+  color: var(--fwe-text-light);
+}
+.fwe-file-input {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  opacity: 0;
+  cursor: pointer;
+}
+.fwe-opcua-certificate-field.is-invalid .fwe-file-input-wrap {
+  border-bottom: 2px solid var(--fwe-red);
+}
+.fwe-file-input:focus-visible + span {
+  outline: 2px solid var(--fwe-hero);
+  outline-offset: 2px;
 }
 .fwe-opcua-auth {
   margin: 24px 0 0;
@@ -1170,6 +1213,12 @@ button:focus-visible {
   }
 }
 @media (max-width: 768px) {
+  .fwe-table-scroll {
+    overflow-x: auto;
+  }
+  .fwe-plc-table {
+    min-width: 880px;
+  }
   .fwe-navbar-inner {
     padding: 0 24px 0 18px;
   }

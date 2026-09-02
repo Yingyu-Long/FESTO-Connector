@@ -157,6 +157,7 @@ export default function Dashboard() {
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [openMenuIndex, setOpenMenuIndex] = useState<number | null>(null);
+  const [mqttMenuOpen, setMqttMenuOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{
     index: number;
     connection: SavedConnection;
@@ -372,7 +373,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="fwe-table-scroll">
-                <table className="fwe-table">
+                <table className="fwe-table fwe-plc-table">
                   <thead>
                     <tr>
                       <th className="fwe-icon-cell" />
@@ -530,14 +531,30 @@ export default function Dashboard() {
                       </td>
                       <td className="fwe-menu-cell">
                         <button
-                          className="fwe-edit-link"
+                          className="fwe-icon-button"
                           type="button"
-                          aria-label="Edit MQTT connection"
-                          onClick={() => navigate("/mqtt")}
+                          aria-label="MQTT connection actions"
+                          aria-expanded={mqttMenuOpen}
+                          onClick={() => setMqttMenuOpen((isOpen) => !isOpen)}
                         >
-                          <IconEdit aria-hidden="true" />
-                          Edit
+                          <IconMore />
                         </button>
+                        {mqttMenuOpen && (
+                          <div className="fwe-row-menu" role="menu">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="fwe-menu-edit"
+                              onClick={() => {
+                                setMqttMenuOpen(false);
+                                navigate("/mqtt");
+                              }}
+                            >
+                              <IconEdit aria-hidden="true" />
+                              Edit
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   </tbody>

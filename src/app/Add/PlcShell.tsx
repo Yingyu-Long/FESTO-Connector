@@ -150,6 +150,7 @@ export function SelectField({
   onChange,
   options,
   required = true,
+  invalid = false,
   className,
 }: {
   label: string;
@@ -157,10 +158,11 @@ export function SelectField({
   onChange: (value: string) => void;
   options: string[];
   required?: boolean;
+  invalid?: boolean;
   className?: string;
 }) {
   return (
-    <label className={`fwe-field ${className ?? ""}`}>
+    <label className={`fwe-field ${className ?? ""} ${invalid ? "is-invalid" : ""}`}>
       <span>
         {label}
         {required ? " *" : ""}
@@ -170,6 +172,7 @@ export function SelectField({
           <option key={option}>{option}</option>
         ))}
       </select>
+      {invalid && <em>Required</em>}
     </label>
   );
 }

@@ -2,13 +2,17 @@ import mqtt from "mqtt";
 
 const clients = new Map();
 
+//get the mqtt url based on the configuration
 function getMqttUrl(config) {
-  const protocol = ["tcp://", "tcp:", "mqtt://", "mqtt:"].includes(config.protocol)
+  const protocol = ["tcp://", "tcp:", "mqtt://", "mqtt:"].includes(
+    config.protocol,
+  )
     ? "mqtt://"
     : (config.protocol ?? "mqtt://");
   return `${protocol}${config.host}:${config.port}`;
 }
 
+//get the mqtt client based on the configuration
 async function getClient(config) {
   const url = getMqttUrl(config);
   const key = `${url}:${config.username ?? ""}:${config.clientId ?? ""}`;

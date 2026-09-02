@@ -7,6 +7,40 @@ import { configString, saveConnection } from "./storage";
 import type { SavedConnection } from "./storage";
 import { saveCurrentConfiguration } from "../configurationApi";
 
+type CertificateFieldProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  invalid: boolean;
+  accept: string;
+};
+
+function CertificateField({
+  label,
+  value,
+  onChange,
+  invalid,
+  accept,
+}: CertificateFieldProps) {
+  return (
+    <label className={`fwe-field fwe-opcua-certificate-field ${invalid ? "is-invalid" : ""}`}>
+      <span>{label} *</span>
+      <span className="fwe-input-wrap fwe-file-input-wrap">
+        <input
+          className="fwe-file-input"
+          type="file"
+          accept={accept}
+          onChange={(event) => onChange(event.target.files?.[0]?.name ?? "")}
+        />
+        <span className={value ? "" : "is-placeholder"}>
+          {value || "Choose file ..."}
+        </span>
+      </span>
+      {invalid && <em>Required</em>}
+    </label>
+  );
+}
+
 export default function Opcua() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -20,15 +54,36 @@ export default function Opcua() {
     password: configString(editConnection, "password", ""),
   });
   const [securityMode, setSecurityMode] = useState(configString(editConnection, "securityMode", "NONE_MODE"));
+  const [securityPolicy, setSecurityPolicy] = useState(configString(editConnection, "securityPolicy", "NONE"));
+  const [certificates, setCertificates] = useState({
+    rootCertificate: configString(editConnection, "rootCertificate", ""),
+    clientCertificate: configString(editConnection, "clientCertificate", ""),
+    clientKey: configString(editConnection, "clientKey", ""),
+  });
   const [authType, setAuthType] = useState(configString(editConnection, "authType", "None"));
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
+  const setCertificate = (key: keyof typeof certificates) => (value: string) =>
+    setCertificates((current) => ({ ...current, [key]: value }));
+  const usesSecurity = securityMode !== "NONE_MODE";
+  const requiresCertificates = usesSecurity && securityPolicy !== "NONE";
+  const certificatesValid =
+    !usesSecurity ||
+    (requiresCertificates &&
+      Boolean(certificates.rootCertificate) &&
+      Boolean(certificates.clientCertificate) &&
+      Boolean(certificates.clientKey));
+  const updateSecurityMode = (value: string) => {
+    setSecurityMode(value);
+    if (value === "NONE_MODE") setSecurityPolicy("NONE");
+  };
   const valid = Boolean(
     values.id &&
     values.host &&
     values.port &&
+    certificatesValid &&
     (authType === "None" || (values.username && values.password)),
   );
   const save = async () => {
@@ -40,10 +95,16 @@ export default function Opcua() {
       protocol: "opc.tcp",
       host: values.host,
       port: values.port,
-      details: `server: ${values.server || "default"}, security: ${securityMode}, authentication: ${authType}`,
+      details: `server: ${values.server || "default"}, security: ${securityMode}/${securityPolicy}, authentication: ${authType}`,
       status: "disconnected",
       editPath: "/add/opcua",
-      config: { ...values, securityMode, authType },
+      config: {
+        ...values,
+        ...certificates,
+        securityMode,
+        securityPolicy,
+        authType,
+      },
     });
     await saveCurrentConfiguration();
     navigate("/dashboard");
@@ -100,10 +161,45 @@ export default function Opcua() {
                 className="fwe-opcua-security-mode-field"
                 label="Message Security Mode"
                 value={securityMode}
-                onChange={setSecurityMode}
+                onChange={updateSecurityMode}
                 options={["NONE_MODE", "SIGN", "SIGN_AND_ENCRYPT"]}
               />
+              {usesSecurity && (
+                <SelectField
+                  className="fwe-opcua-security-policy-field"
+                  label="Security Policy"
+                  value={securityPolicy}
+                  onChange={setSecurityPolicy}
+                  options={["NONE", "BASIC256SHA256", "BASIC256"]}
+                  invalid={submitted && securityPolicy === "NONE"}
+                />
+              )}
             </div>
+            {requiresCertificates && (
+              <div className="fwe-opcua-certificates">
+                <CertificateField
+                  label="Root certificate"
+                  value={certificates.rootCertificate}
+                  onChange={setCertificate("rootCertificate")}
+                  invalid={submitted && !certificates.rootCertificate}
+                  accept=".cer,.crt,.der,.pem"
+                />
+                <CertificateField
+                  label="Client certificate"
+                  value={certificates.clientCertificate}
+                  onChange={setCertificate("clientCertificate")}
+                  invalid={submitted && !certificates.clientCertificate}
+                  accept=".cer,.crt,.der,.pem"
+                />
+                <CertificateField
+                  label="Client key"
+                  value={certificates.clientKey}
+                  onChange={setCertificate("clientKey")}
+                  invalid={submitted && !certificates.clientKey}
+                  accept=".key,.pem"
+                />
+              </div>
+            )}
             <div className="fwe-opcua-auth">
               <div className="fwe-opcua-auth-options" role="radiogroup" aria-label="Authentication">
                 <label>
