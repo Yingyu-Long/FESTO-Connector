@@ -1,47 +1,67 @@
 # FESTO Connector
 
-FESTO Connector is a web-based industrial gateway configuration tool. It stores connector settings in PostgreSQL, reads Siemens S7 PLC data blocks through Snap7, and publishes the raw data to an MQTT broker.
+FESTO Connector is a web application for configuring an industrial data gateway. It runs on a computer in the production network, connects to PLCs, and publishes collected data to an MQTT broker.
 
-> The current runtime PLC implementation supports **Siemens S7**. The UI can save configurations for other protocols, but Beckhoff, Rockwell, and OPC UA do not yet have corresponding backend pollers.
+The browser is only used to configure and monitor connections. The Node.js backend is the component that connects to PLCs, PostgreSQL, and MQTT, so the computer running the backend must have access to all three.
+
+## What it does
+
+- Stores connector configuration in PostgreSQL.
+- Connects to Siemens S7 PLCs and reads configured data blocks.
+- Connects to OPC UA servers and subscribes to selected variable NodeIds.
+- Publishes PLC data to MQTT topics such as `festo/plc/<PLC_ID>`.
+- Lets users test, save, rescan, import, and export PLC and MQTT configurations from a web dashboard.
+
+Siemens S7 and OPC UA have active backend connection support. Beckhoff ADS and Rockwell EIP can be configured in the UI, but their backend drivers are not implemented yet.
 
 ## Architecture
 
 ```text
-Browser (React / Vite)
-        |
-        | REST API: /api/*
-        v
-Node.js / Express backend
-   |             |
-   |             +--> PostgreSQL: connector configuration JSON
-   |
-   +--> Siemens S7 PLC (Snap7 / TCP 102)
-                     |
-                     v
-               MQTT Broker
-                     |
-                     v
-          festo/plc/<PLC_ID>
+Browser
+  |
+  | HTTPS / REST API
+  v
+Web server + Node.js backend
+  |             |
+  |             +--> PostgreSQL: saved connector configuration
+  |
+  +--> Siemens S7 PLC or OPC UA server
+  |
+  +--> MQTT broker: festo/plc/<PLC_ID>
 ```
 
-The backend publishes a JSON payload for every PLC polling cycle. Data block bytes are sent as Base64 in `rawData`; the gateway does not currently decode DB bytes into named tags or data types.
+## Deploy on a new computer
 
-## Prerequisites
+The following steps assume a Linux server or industrial PC. The same application commands work on Windows and macOS; only the service and web-server setup differ.
 
-- Node.js LTS (Node 20 or later recommended)
+### 1. Prepare the machine
+
+Install the following software:
+
+- Node.js 20 or later
 - PostgreSQL 14 or later
-- An MQTT broker reachable from the computer running the Node.js backend
-- For live Siemens testing: a reachable Siemens S7 PLC with S7 communication enabled
+- Nginx or another web server for production access
+- An MQTT broker reachable from this machine
 
-Install project dependencies:
+Before continuing, verify network access from the new machine to:
+
+- PostgreSQL on TCP `5432` (or its configured port)
+- The MQTT broker on its configured port, commonly TCP `1883`
+- Siemens S7 PLCs on TCP `102`
+- OPC UA servers on TCP `4840` or their configured port
+
+### 2. Copy the application and install dependencies
+
+Copy or clone this repository to the target computer, then run:
 
 ```bash
+cd /opt/FESTO-Connector
 npm ci
 ```
 
-## Database setup
+### 3. Create the PostgreSQL database
 
-Create a database and run the following SQL once:
+Create a PostgreSQL database and user, then connect to the new database and create the table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS connector_configurations (
@@ -51,35 +71,30 @@ CREATE TABLE IF NOT EXISTS connector_configurations (
 );
 ```
 
-Create `.env` in the project root:
+### 4. Configure environment variables
+
+Create `/opt/FESTO-Connector/.env`:
 
 ```env
 PORT=3001
 DATABASE_URL=postgresql://connector_user:your_password@127.0.0.1:5432/festo_connector
 ```
 
-`MQTT_URL` appears in `.env.example` for reference but is not used by the current backend. MQTT connection details are entered in the web UI and passed to the backend as part of the PLC connection request.
+Replace the user, password, host, port, and database name with the values for the target environment. Do not commit `.env` to source control.
 
-## Run locally
+### 5. Build and start the application
 
-Use two terminals in the project directory.
-
-Start the API server:
+Build the frontend and start the backend:
 
 ```bash
-npm run server:dev
+npm run build
+npm run server
 ```
 
-Start the frontend development server:
+Verify that the backend can reach PostgreSQL:
 
 ```bash
-npm run dev
-```
-
-Vite proxies `/api` requests to `http://localhost:3001` during development. Confirm that the backend can reach PostgreSQL:
-
-```bash
-curl http://localhost:3001/api/health
+curl http://127.0.0.1:3001/api/health
 ```
 
 Expected response:
@@ -88,97 +103,18 @@ Expected response:
 {"ok":true,"database":true}
 ```
 
-## Configure and test a Siemens PLC
+For a production installation, run `npm run server` under a service manager such as `systemd` or PM2 so it restarts automatically after a reboot or failure.
 
-1. Open the web UI and configure the MQTT broker first.
-2. Add a Siemens connection with a PLC ID, IP/hostname, rack, slot, data-block range, and polling interval.
-3. Click **Test connection** or **Save**.
+### 6. Serve the frontend with Nginx
 
-For many S7-1200/1500 configurations the connection values are:
-
-```text
-Port: 102
-Rack: 0
-Slot: 1
-```
-
-These values depend on the PLC model and its TIA Portal configuration. The PLC must allow S7 external communication (for example, PUT/GET where applicable), and the backend host must be able to reach TCP port 102.
-
-Data-block ranges may be entered as `1`, `DB1`, `1-20`, or `DB1-DB20`. A range is capped at 200 blocks. The backend reads each configured DB from offset `0`; a configured `size` is used when present, otherwise the DB size is obtained from the PLC.
-
-Clicking **Test connection** starts the polling loop in the current implementation; it is not a connect-and-immediately-disconnect check.
-
-## View MQTT payloads and raw PLC data
-
-Siemens data is published to:
-
-```text
-festo/plc/<PLC_ID>
-```
-
-For example, PLC ID `plc-test` publishes to `festo/plc/plc-test`.
-
-If the Mosquitto CLI is installed, subscribe to every connector PLC topic:
-
-```bash
-mosquitto_sub -h localhost -p 1883 -t 'festo/plc/#' -v
-```
-
-Alternatively, because this project already includes the `mqtt` package, run this from the project directory without installing Mosquitto tools:
-
-```bash
-node --input-type=module -e "import mqtt from 'mqtt'; const client = mqtt.connect('mqtt://localhost:1883'); client.on('connect', () => { console.log('Subscribed to festo/plc/#'); client.subscribe('festo/plc/#'); }); client.on('message', (topic, message) => console.log(topic, message.toString())); client.on('error', console.error);"
-```
-
-Example payload:
-
-```json
-{
-  "plcId": "plc-test",
-  "timestamp": 1788190000000,
-  "dataBlocks": [
-    {
-      "dataBlock": 1,
-      "start": 0,
-      "size": 20,
-      "encoding": "base64",
-      "rawData": "AAECAwQ..."
-    }
-  ],
-  "quality": "good",
-  "errors": []
-}
-```
-
-`rawData` is a Base64-encoded byte buffer. Decode and interpret it according to your PLC DB layout, offsets, and Siemens data types. A `quality` value of `good`, `partial`, or `bad` indicates whether all, some, or none of the requested DB reads succeeded.
-
-## MQTT broker in Docker
-
-The application can run directly on the host while the MQTT broker runs in Docker. Expose the broker port to the host:
-
-```yaml
-ports:
-  - "1883:1883"
-```
-
-Then configure the UI and the subscription client to use `localhost:1883`. If the broker is on another host, use that host's reachable IP address and port. Do not use a Docker container name from the host unless DNS/networking has been configured explicitly.
-
-## Production deployment
-
-Build the frontend:
-
-```bash
-npm run build
-```
-
-Run the Node backend with a process manager such as systemd, PM2, or a container. Serve the `dist/` directory through a web server and proxy `/api/` to the backend. Example Nginx configuration:
+Create an Nginx server configuration and update the paths and hostname as needed:
 
 ```nginx
 server {
     listen 80;
     server_name connector.example.local;
 
-    root /path/to/FESTO-Connector/dist;
+    root /opt/FESTO-Connector/dist;
     index index.html;
 
     location / {
@@ -193,25 +129,60 @@ server {
 }
 ```
 
-The backend machine—not the browser—must have network access to PostgreSQL, the MQTT broker, and all configured PLCs.
+Reload Nginx, then open `http://connector.example.local` from a browser. Add TLS/HTTPS before exposing the application outside a trusted internal network.
+
+### 7. Configure the connector
+
+1. Open the dashboard in a browser.
+2. Configure and test the MQTT broker.
+3. Add a Siemens S7 or OPC UA PLC connection.
+4. Test the connection, select S7 data blocks or OPC UA nodes, then save it.
+5. Confirm that the dashboard status is `Connected` and that MQTT messages arrive on `festo/plc/<PLC_ID>`.
+
+For many S7-1200/1500 installations, the initial values are port `102`, rack `0`, and slot `1`. The actual values depend on the PLC model and TIA Portal configuration. The PLC must allow the required external S7 communication.
+
+## Local development
+
+Use two terminals in the project directory:
+
+```bash
+npm run server:dev
+```
+
+```bash
+npm run dev
+```
+
+During development, Vite proxies `/api` requests to `http://localhost:3001`.
+
+## MQTT payloads
+
+Siemens data is published as raw Base64 data. OPC UA messages contain the selected NodeId, value, data type, timestamp, and status code.
+
+Subscribe to all PLC topics with Mosquitto:
+
+```bash
+mosquitto_sub -h localhost -p 1883 -t 'festo/plc/#' -v
+```
 
 ## API overview
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Check PostgreSQL connectivity. |
-| `GET` | `/api/configuration` | Load the most recently updated connector configuration. |
-| `PUT` | `/api/configuration` | Create or update the configuration JSON. |
-| `DELETE` | `/api/configuration/message-sources/:uniqueKey` | Remove one saved message source. |
+| `GET` | `/api/configuration` | Load the most recently saved connector configuration. |
+| `PUT` | `/api/configuration` | Save connector configuration. |
 | `POST` | `/api/mqtt/connect` | Test MQTT broker connectivity. |
-| `POST` | `/api/plcs/siemens/connect` | Connect to a Siemens PLC and start its poller. |
-| `DELETE` | `/api/plcs/siemens/:id` | Stop an active Siemens PLC poller. |
+| `POST` | `/api/plcs/siemens/connect` | Connect to a Siemens PLC and start polling. |
+| `POST` | `/api/plcs/opcua/test` | Test an OPC UA connection. |
+| `POST` | `/api/plcs/opcua/browse` | Browse OPC UA nodes. |
+| `POST` | `/api/plcs/opcua/connect` | Start an OPC UA subscription. |
 
 ## Current limitations
 
-- Pollers are in memory and are not automatically restored after a backend restart.
-- Removing a PLC configuration in the dashboard does not currently call the poller stop endpoint.
-- Per-data-block polling intervals are accepted by the UI, but the backend currently uses the first block's interval as the PLC-wide polling interval.
-- The Siemens backend currently connects through Snap7's `ConnectTo(host, rack, slot)` flow; the UI port field is not passed to that call.
-- MQTT certificate authentication is displayed in the UI but TLS certificate options are not implemented by the backend.
-- Configuration JSON can contain MQTT credentials. Protect database access, restrict API access in production, and avoid committing `.env` files.
+- PLC pollers are kept in memory and are not restored automatically after a backend restart.
+- Beckhoff ADS and Rockwell EIP backend drivers are not implemented.
+- OPC UA currently supports anonymous connections with no security mode or security policy.
+- The Siemens backend reads raw data blocks; it does not decode bytes into named tags or data types.
+- The Siemens backend uses Snap7 `ConnectTo(host, rack, slot)`; the port field is saved for configuration but is not passed to Snap7.
+- Protect the API and database because saved configuration can contain MQTT credentials.
