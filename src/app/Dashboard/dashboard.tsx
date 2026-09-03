@@ -369,6 +369,16 @@ function connectionDetailItems(connection: SavedConnection): DetailItem[] {
   return [];
 }
 
+function hasDisplayableDetails(connection: SavedConnection) {
+  const details = connection.details.trim();
+  const normalizedDetails = details.toLowerCase();
+  return (
+    Boolean(details) &&
+    !normalizedDetails.startsWith("uri:") &&
+    !normalizedDetails.startsWith("remote-rack:")
+  );
+}
+
 function ConnectionDetails({ connection }: { connection: SavedConnection }) {
   const items = connectionDetailItems(connection);
   const heading =
@@ -378,7 +388,9 @@ function ConnectionDetails({ connection }: { connection: SavedConnection }) {
 
   return (
     <div className="fwe-details">
-      <p className="fwe-details-message">{connection.details}</p>
+      {hasDisplayableDetails(connection) && (
+        <p className="fwe-details-message">{connection.details}</p>
+      )}
       {items.length > 0 && (
         <section className="fwe-detail-items" aria-label={heading}>
           <h3>{heading}</h3>
@@ -705,9 +717,11 @@ export default function Dashboard() {
                           <td>{connection.host}</td>
                           <td>{connection.port}</td>
                           <td className="fwe-connection-details">
-                            <span className="fwe-connection-details-content">
-                              {connection.details}
-                            </span>
+                            {hasDisplayableDetails(connection) && (
+                              <span className="fwe-connection-details-content">
+                                {connection.details}
+                              </span>
+                            )}
                           </td>
                           <td>
                             <ConnectionStatus status={connection.status} />

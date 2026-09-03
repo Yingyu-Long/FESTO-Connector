@@ -115,7 +115,7 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
     protocol,
     host: uri.hostname,
     port: uri.port || "",
-    details: `uri: ${source.uri}`,
+    details: "",
     status: "disconnected",
     config: isRecord(source[configurationKey]) ? source[configurationKey] : {},
   };
