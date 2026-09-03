@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { LoadingIndicator } from "@festo-ui/react";
 import {
   IconAdd,
   IconCheckStatus,
@@ -32,6 +33,17 @@ type MqttSummary = {
   port: string;
   status: "connected" | "disconnected";
 };
+
+type DetailItem = {
+  label: string;
+  value: string;
+};
+
+type RescanResult = {
+  connection: SavedConnection;
+  status: SavedConnection["status"];
+  supported: boolean;
+};
 const editPaths: Record<string, string> = {
   s7: "/add/siemens",
   eip: "/add/rockwell",
@@ -55,7 +67,11 @@ function readMqttSummary(): MqttSummary | null {
     const saved = JSON.parse(
       localStorage.getItem("festo-mqtt-config") ?? "null",
     ) as Partial<MqttSummary> | null;
-    if (!saved || typeof saved.host !== "string" || typeof saved.port !== "string") {
+    if (
+      !saved ||
+      typeof saved.host !== "string" ||
+      typeof saved.port !== "string"
+    ) {
       return null;
     }
     const protocol = saved.protocol === "tcp:" ? "tcp://" : saved.protocol;
@@ -73,6 +89,7 @@ function readMqttSummary(): MqttSummary | null {
 function prepareDatabaseConfiguration(configuration: unknown) {
   const prepared = prepareConfiguration(configuration);
   const previous = readMqttSummary();
+  const previousConnections = readConnections();
   const sameMqttConnection =
     previous &&
     previous.host === prepared.mqttConfig.host &&
@@ -81,6 +98,20 @@ function prepareDatabaseConfiguration(configuration: unknown) {
   if (sameMqttConnection) {
     prepared.mqttConfig.status = previous.status;
   }
+
+  prepared.connections = prepared.connections.map((connection) => {
+    const previousConnection = previousConnections.find(
+      (saved) =>
+        saved.protocol === connection.protocol &&
+        saved.id === connection.id &&
+        saved.host === connection.host &&
+        saved.port === connection.port,
+    );
+
+    return previousConnection?.status === "connected"
+      ? { ...connection, status: "connected" }
+      : connection;
+  });
 
   return prepared;
 }
@@ -103,9 +134,128 @@ function readConnections() {
   }
 }
 
+function connectionKey(connection: SavedConnection) {
+  return connection.recordId ?? `${connection.protocol}-${connection.id}`;
+}
+
+function readMqttConfig() {
+  try {
+    const config = JSON.parse(
+      localStorage.getItem("festo-mqtt-config") ?? "null",
+    ) as Record<string, unknown> | null;
+    return config && typeof config.host === "string" && config.host
+      ? config
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function reconnect(connection: SavedConnection): Promise<RescanResult> {
+  const config = connection.config ?? {};
+  let endpoint: string;
+  let body: Record<string, unknown>;
+
+  if (connection.protocol === "s7") {
+    const dataBlocks = Array.isArray(config.dataBlocks)
+      ? config.dataBlocks.flatMap((block) => {
+          if (typeof block !== "object" || block === null) return [];
+          const value = block as Record<string, unknown>;
+          const range = value.dataBlock ?? value.range;
+          if (typeof range !== "string" || !range) return [];
+          return [
+            {
+              range,
+              polling: Number(value.polling ?? config.polling ?? 500),
+              ...(value.size ? { size: Number(value.size) } : {}),
+            },
+          ];
+        })
+      : [];
+    endpoint = "/api/plcs/siemens/connect";
+    body = {
+      id: connection.id,
+      host: connection.host,
+      port: Number(connection.port),
+      rack: Number(config.rack ?? 0),
+      slot: Number(config.slot ?? 1),
+      polling: Number(dataBlocks[0]?.polling ?? config.polling ?? 500),
+      dataBlocks,
+      mqtt: readMqttConfig(),
+      mqttTopic: `festo/plc/${connection.id}`,
+    };
+  } else if (connection.protocol === "opc.tcp") {
+    endpoint = "/api/plcs/opcua/connect";
+    body = {
+      id: connection.id,
+      host: connection.host,
+      port: Number(connection.port),
+      server: String(config.server ?? ""),
+      securityMode: String(config.securityMode ?? "NONE_MODE"),
+      securityPolicy: String(config.securityPolicy ?? "NONE"),
+      authType: String(config.authType ?? "None"),
+      polling: Number(config.polling ?? 500),
+      nodeIds: Array.isArray(config.nodeIds) ? config.nodeIds : [],
+      mqtt: readMqttConfig(),
+      mqttTopic: `festo/plc/${connection.id}`,
+    };
+  } else {
+    return { connection, status: "disconnected", supported: false };
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const result = (await response.json().catch(() => null)) as {
+      connected?: boolean;
+    } | null;
+    return {
+      connection,
+      status: response.ok && result?.connected ? "connected" : "disconnected",
+      supported: true,
+    };
+  } catch {
+    return { connection, status: "disconnected", supported: true };
+  }
+}
+
+function storeRescanResults(results: RescanResult[]) {
+  const statuses = new Map(
+    results.map((result) => [connectionKey(result.connection), result.status]),
+  );
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem("festo-connections") ?? "[]",
+    ) as SavedConnection[];
+    if (!Array.isArray(saved)) return;
+    localStorage.setItem(
+      "festo-connections",
+      JSON.stringify(
+        saved.map((connection) => ({
+          ...connection,
+          status: statuses.get(connectionKey(connection)) ?? connection.status,
+        })),
+      ),
+    );
+  } catch {
+    // Keep the current dashboard state when the local configuration is invalid.
+  }
+}
+
 function downloadConfiguration(connections: SavedConnection[]) {
   const blob = new Blob(
-    [JSON.stringify(buildConfiguration(connections.filter((connection) => connection !== defaultConnection)), null, 4)],
+    [
+      JSON.stringify(
+        buildConfiguration(
+          connections.filter((connection) => connection !== defaultConnection),
+        ),
+        null,
+        4,
+      ),
+    ],
     { type: "application/json" },
   );
   const url = URL.createObjectURL(blob);
@@ -120,15 +270,28 @@ function Action({
   icon,
   label,
   onClick,
+  loading = false,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
+  loading?: boolean;
 }) {
   return (
-    <button className="fwe-action" type="button" onClick={onClick}>
-      {icon}
-      {label}
+    <button
+      className="fwe-action"
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+    >
+      {loading ? (
+        <LoadingIndicator size="small">{label}...</LoadingIndicator>
+      ) : (
+        <>
+          {icon}
+          {label}
+        </>
+      )}
     </button>
   );
 }
@@ -151,6 +314,88 @@ function ConnectionStatus({ status }: { status: SavedConnection["status"] }) {
   );
 }
 
+function connectionDetailItems(connection: SavedConnection): DetailItem[] {
+  const config = connection.config ?? {};
+
+  if (connection.protocol === "opc.tcp") {
+    const selectedNodes = Array.isArray(config.selectedNodes)
+      ? config.selectedNodes
+      : [];
+    const namedNodes = selectedNodes.flatMap((node) => {
+      if (typeof node !== "object" || node === null) return [];
+      const value = node as Record<string, unknown>;
+      if (typeof value.nodeId !== "string") return [];
+      return [
+        {
+          label:
+            typeof value.displayName === "string"
+              ? value.displayName
+              : value.nodeId,
+          value: value.nodeId,
+        },
+      ];
+    });
+    if (namedNodes.length > 0) return namedNodes;
+
+    return Array.isArray(config.nodeIds)
+      ? config.nodeIds
+          .filter((nodeId): nodeId is string => typeof nodeId === "string")
+          .map((nodeId) => ({ label: nodeId, value: nodeId }))
+      : [];
+  }
+
+  if (connection.protocol === "s7" && Array.isArray(config.dataBlocks)) {
+    return config.dataBlocks.flatMap((block) => {
+      if (typeof block !== "object" || block === null) return [];
+      const value = block as Record<string, unknown>;
+      const dataBlock = value.dataBlock ?? value.range;
+      if (typeof dataBlock !== "string" || !dataBlock) return [];
+      const polling = value.polling;
+      const size = value.size;
+      const metadata = [
+        typeof polling === "string" || typeof polling === "number"
+          ? `${polling} ms`
+          : "",
+        typeof size === "string" || typeof size === "number"
+          ? `size: ${size}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      return [{ label: dataBlock, value: metadata }];
+    });
+  }
+
+  return [];
+}
+
+function ConnectionDetails({ connection }: { connection: SavedConnection }) {
+  const items = connectionDetailItems(connection);
+  const heading =
+    connection.protocol === "opc.tcp"
+      ? "Selected OPC UA nodes"
+      : "S7 data blocks";
+
+  return (
+    <div className="fwe-details">
+      <p className="fwe-details-message">{connection.details}</p>
+      {items.length > 0 && (
+        <section className="fwe-detail-items" aria-label={heading}>
+          <h3>{heading}</h3>
+          <ul>
+            {items.map((item) => (
+              <li key={`${item.label}-${item.value}`}>
+                <strong>{item.label}</strong>
+                {item.value && <span>{item.value}</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [page, setPage] = useState<Page>("Status");
   const [asset, setAsset] = useState<Asset>("MIP");
@@ -168,6 +413,7 @@ export default function Dashboard() {
   );
   const [connections, setConnections] =
     useState<SavedConnection[]>(readConnections);
+  const [rescanningKeys, setRescanningKeys] = useState<string[]>([]);
   const navigate = useNavigate();
   useEffect(() => {
     const refreshConnections = () => {
@@ -178,7 +424,8 @@ export default function Dashboard() {
     window.addEventListener("storage", refreshMqtt);
     void loadConfiguration()
       .then((configuration) => {
-        if (!configuration || !Array.isArray(configuration.messageSources)) return;
+        if (!configuration || !Array.isArray(configuration.messageSources))
+          return;
         const prepared = prepareDatabaseConfiguration(configuration);
         const uniqueConnections = deduplicateConnections(prepared.connections);
         localStorage.setItem(
@@ -196,7 +443,9 @@ export default function Dashboard() {
         setConnections(readConnections());
         setMqttSummary(readMqttSummary());
       })
-      .catch((error) => console.error("Unable to load database configuration", error));
+      .catch((error) =>
+        console.error("Unable to load database configuration", error),
+      );
     return () => {
       window.removeEventListener("storage", refreshConnections);
       window.removeEventListener("storage", refreshMqtt);
@@ -206,7 +455,35 @@ export default function Dashboard() {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 2200);
   };
-  const deleteConnection = async (index: number, connection: SavedConnection) => {
+  const rescanConnections = async (targets: SavedConnection[]) => {
+    const reconnectable = targets.filter(
+      (connection) => connection !== defaultConnection,
+    );
+    if (reconnectable.length === 0) return;
+
+    const keys = reconnectable.map(connectionKey);
+    setRescanningKeys((current) => [...new Set([...current, ...keys])]);
+    const results = await Promise.all(reconnectable.map(reconnect));
+    storeRescanResults(results);
+    setConnections(readConnections());
+    setRescanningKeys((current) =>
+      current.filter((key) => !keys.includes(key)),
+    );
+
+    const connected = results.filter(
+      (result) => result.status === "connected",
+    ).length;
+    const unsupported = results.filter((result) => !result.supported).length;
+    notify(
+      unsupported > 0
+        ? `${connected} connected; ${unsupported} PLC type is not supported yet`
+        : `${connected} of ${results.length} PLC connections succeeded`,
+    );
+  };
+  const deleteConnection = async (
+    index: number,
+    connection: SavedConnection,
+  ) => {
     try {
       if (connection === defaultConnection) {
         localStorage.setItem("festo-default-connection-hidden", "true");
@@ -219,7 +496,8 @@ export default function Dashboard() {
         localStorage.getItem("festo-connections") ?? "[]",
       ) as SavedConnection[];
       const defaultVisible = connections[0] === defaultConnection;
-      const uniqueKey = connection.recordId ?? `${connection.protocol}-${connection.id}`;
+      const uniqueKey =
+        connection.recordId ?? `${connection.protocol}-${connection.id}`;
       await deleteConfigurationSource(uniqueKey);
       saved.splice(index - (defaultVisible ? 1 : 0), 1);
       localStorage.setItem("festo-connections", JSON.stringify(saved));
@@ -322,28 +600,29 @@ export default function Dashboard() {
                 <h1>PLC Connections</h1>
                 <div className="fwe-actions">
                   <Action
-                    icon={<IconReinitialize aria-hidden="true" />}
-                    label="Rescan"
-                    onClick={() => notify("Rescanning connections")}
-                  />
-                  <Action
                     icon={<IconRefresh aria-hidden="true" />}
                     label="Refresh"
                     onClick={async () => {
                       try {
                         const configuration = await loadConfiguration();
                         if (configuration) {
-                          const prepared = prepareDatabaseConfiguration(configuration);
+                          const prepared =
+                            prepareDatabaseConfiguration(configuration);
                           localStorage.setItem(
                             "festo-connections",
-                            JSON.stringify(deduplicateConnections(prepared.connections)),
+                            JSON.stringify(
+                              deduplicateConnections(prepared.connections),
+                            ),
                           );
                           localStorage.setItem(
                             "festo-mqtt-config",
                             JSON.stringify(prepared.mqttConfig),
                           );
                           if (typeof configuration.id === "string") {
-                            localStorage.setItem("festo-configuration-id", configuration.id);
+                            localStorage.setItem(
+                              "festo-configuration-id",
+                              configuration.id,
+                            );
                           }
                         } else {
                           localStorage.setItem("festo-connections", "[]");
@@ -353,7 +632,11 @@ export default function Dashboard() {
                         setMqttSummary(readMqttSummary());
                         notify("Configuration refreshed");
                       } catch (error) {
-                        notify(error instanceof Error ? error.message : "Unable to refresh configuration");
+                        notify(
+                          error instanceof Error
+                            ? error.message
+                            : "Unable to refresh configuration",
+                        );
                       }
                     }}
                   />
@@ -364,6 +647,12 @@ export default function Dashboard() {
                       downloadConfiguration(connections);
                       notify("Configuration exported");
                     }}
+                  />
+                  <Action
+                    icon={<IconReinitialize aria-hidden="true" />}
+                    label="Rescan"
+                    loading={rescanningKeys.length > 0}
+                    onClick={() => void rescanConnections(connections)}
                   />
                   <Action
                     icon={<IconAdd aria-hidden="true" />}
@@ -472,13 +761,26 @@ export default function Dashboard() {
                                 <button
                                   type="button"
                                   role="menuitem"
+                                  disabled={rescanningKeys.includes(
+                                    connectionKey(connection),
+                                  )}
                                   onClick={() => {
-                                    notify(`Rescanning PLC ${connection.id}`);
+                                    void rescanConnections([connection]);
                                     setOpenMenuIndex(null);
                                   }}
                                 >
-                                  <IconUpdate aria-hidden="true" />
-                                  Rescan
+                                  {rescanningKeys.includes(
+                                    connectionKey(connection),
+                                  ) ? (
+                                    <LoadingIndicator size="small">
+                                      Rescanning...
+                                    </LoadingIndicator>
+                                  ) : (
+                                    <>
+                                      <IconUpdate aria-hidden="true" />
+                                      Rescan
+                                    </>
+                                  )}
                                 </button>
                               </div>
                             )}
@@ -490,11 +792,7 @@ export default function Dashboard() {
                             key={`${connection.protocol}-${connection.id}-${index}-details`}
                           >
                             <td colSpan={8}>
-                              <div className="fwe-details">
-                                <p className="fwe-details-message">
-                                  {connection.details}
-                                </p>
-                              </div>
+                              <ConnectionDetails connection={connection} />
                             </td>
                           </tr>
                         )}
@@ -527,7 +825,9 @@ export default function Dashboard() {
                           : "tcp://192.168.0.1:12"}
                       </td>
                       <td>
-                        <ConnectionStatus status={mqttSummary?.status ?? "disconnected"} />
+                        <ConnectionStatus
+                          status={mqttSummary?.status ?? "disconnected"}
+                        />
                       </td>
                       <td className="fwe-menu-cell">
                         <button

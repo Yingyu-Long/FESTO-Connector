@@ -1,6 +1,10 @@
 import { useState } from "react";
-import { Button } from "@festo-ui/react";
-import { IconConnected, IconFailure } from "@festo-ui/react-icons";
+import { Button, LoadingIndicator } from "@festo-ui/react";
+import {
+  IconCheckStatus,
+  IconConnected,
+  IconFailure,
+} from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, saveConnection } from "./storage";
@@ -14,6 +18,31 @@ type BrowsedNode = {
   nodeClass: string;
   selectable: boolean;
 };
+
+type SelectedNode = {
+  nodeId: string;
+  displayName: string;
+};
+
+function savedSelectedNodes(connection?: SavedConnection): SelectedNode[] {
+  const selectedNodes = connection?.config?.selectedNodes;
+  if (!Array.isArray(selectedNodes)) return [];
+
+  return selectedNodes.flatMap((node) => {
+    if (typeof node !== "object" || node === null) return [];
+    const value = node as Record<string, unknown>;
+    if (typeof value.nodeId !== "string") return [];
+    return [
+      {
+        nodeId: value.nodeId,
+        displayName:
+          typeof value.displayName === "string"
+            ? value.displayName
+            : value.nodeId,
+      },
+    ];
+  });
+}
 
 type CertificateFieldProps = {
   label: string;
@@ -31,7 +60,9 @@ function CertificateField({
   accept,
 }: CertificateFieldProps) {
   return (
-    <label className={`fwe-field fwe-opcua-certificate-field ${invalid ? "is-invalid" : ""}`}>
+    <label
+      className={`fwe-field fwe-opcua-certificate-field ${invalid ? "is-invalid" : ""}`}
+    >
       <span>{label} *</span>
       <span className="fwe-input-wrap fwe-file-input-wrap">
         <input
@@ -52,7 +83,9 @@ function CertificateField({
 export default function Opcua() {
   const location = useLocation();
   const navigate = useNavigate();
-  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
+  const editConnection = (
+    location.state as { connection?: SavedConnection } | null
+  )?.connection;
   const [values, setValues] = useState({
     id: editConnection?.id ?? "",
     host: editConnection?.host ?? "",
@@ -61,19 +94,26 @@ export default function Opcua() {
     username: configString(editConnection, "username", ""),
     password: configString(editConnection, "password", ""),
   });
-  const [securityMode, setSecurityMode] = useState(configString(editConnection, "securityMode", "NONE_MODE"));
-  const [securityPolicy, setSecurityPolicy] = useState(configString(editConnection, "securityPolicy", "NONE"));
+  const [securityMode, setSecurityMode] = useState(
+    configString(editConnection, "securityMode", "NONE_MODE"),
+  );
+  const [securityPolicy, setSecurityPolicy] = useState(
+    configString(editConnection, "securityPolicy", "NONE"),
+  );
   const [certificates, setCertificates] = useState({
     rootCertificate: configString(editConnection, "rootCertificate", ""),
     clientCertificate: configString(editConnection, "clientCertificate", ""),
     clientKey: configString(editConnection, "clientKey", ""),
   });
-  const [authType, setAuthType] = useState(configString(editConnection, "authType", "None"));
+  const [authType, setAuthType] = useState(
+    configString(editConnection, "authType", "None"),
+  );
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const [connectionStatus, setConnectionStatus] =
     useState<SavedConnection["status"]>("disconnected");
   const [connectionError, setConnectionError] = useState("");
+  const [testing, setTesting] = useState(false);
   const [browseNodes, setBrowseNodes] = useState<BrowsedNode[]>([]);
   const [browsePath, setBrowsePath] = useState([
     { nodeId: "RootFolder", label: "Root" },
@@ -85,6 +125,14 @@ export default function Opcua() {
       ? saved.filter((nodeId): nodeId is string => typeof nodeId === "string")
       : [];
   });
+  const [selectedNodeNames, setSelectedNodeNames] = useState(() =>
+    Object.fromEntries(
+      savedSelectedNodes(editConnection).map((node) => [
+        node.nodeId,
+        node.displayName,
+      ]),
+    ),
+  );
   const [polling, setPolling] = useState(
     configString(editConnection, "polling", "500"),
   );
@@ -111,7 +159,8 @@ export default function Opcua() {
     certificatesValid &&
     (authType === "None" || (values.username && values.password)),
   );
-  const subscriptionValid = valid && selectedNodeIds.length > 0 && Boolean(polling);
+  const subscriptionValid =
+    valid && selectedNodeIds.length > 0 && Boolean(polling);
   const buildBackendConfig = () => {
     let mqtt: Record<string, unknown> | undefined;
     try {
@@ -144,22 +193,30 @@ export default function Opcua() {
     setConnectionError("");
     if (!valid) return;
 
+    setTesting(true);
     try {
       const response = await fetch("/api/plcs/opcua/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildBackendConfig()),
       });
-      const result = (await response.json()) as { connected?: boolean; error?: string };
+      const result = (await response.json()) as {
+        connected?: boolean;
+        error?: string;
+      };
       if (!response.ok || !result.connected) {
         setConnectionStatus("disconnected");
-        setConnectionError(result.error ?? "Unable to connect to OPC UA server");
+        setConnectionError(
+          result.error ?? "Unable to connect to OPC UA server",
+        );
         return;
       }
       setConnectionStatus("connected");
     } catch {
       setConnectionStatus("disconnected");
       setConnectionError("Unable to reach the PLC backend");
+    } finally {
+      setTesting(false);
     }
   };
   const browse = async (nodeId = "RootFolder", label = "Root") => {
@@ -171,7 +228,10 @@ export default function Opcua() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...buildBackendConfig(), nodeId }),
       });
-      const result = (await response.json()) as { nodes?: BrowsedNode[]; error?: string };
+      const result = (await response.json()) as {
+        nodes?: BrowsedNode[];
+        error?: string;
+      };
       if (!response.ok || !result.nodes) {
         setConnectionError(result.error ?? "Unable to browse OPC UA nodes");
         return;
@@ -188,12 +248,19 @@ export default function Opcua() {
       setBrowsing(false);
     }
   };
-  const toggleNode = (nodeId: string) => {
+  const toggleNode = (nodeId: string, displayName: string) => {
+    const selected = selectedNodeIds.includes(nodeId);
     setSelectedNodeIds((current) =>
-      current.includes(nodeId)
+      selected
         ? current.filter((item) => item !== nodeId)
         : [...current, nodeId],
     );
+    setSelectedNodeNames((names) => {
+      const nextNames = { ...names };
+      if (selected) delete nextNames[nodeId];
+      else nextNames[nodeId] = displayName;
+      return nextNames;
+    });
   };
   const connectToBackend = async () => {
     const response = await fetch("/api/plcs/opcua/connect", {
@@ -201,7 +268,10 @@ export default function Opcua() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildBackendConfig()),
     });
-    const result = (await response.json()) as { connected?: boolean; error?: string };
+    const result = (await response.json()) as {
+      connected?: boolean;
+      error?: string;
+    };
     if (!response.ok || !result.connected) {
       throw new Error(result.error ?? "Unable to start OPC UA subscription");
     }
@@ -227,6 +297,10 @@ export default function Opcua() {
         securityPolicy,
         authType,
         nodeIds: selectedNodeIds,
+        selectedNodes: selectedNodeIds.map((nodeId) => ({
+          nodeId,
+          displayName: selectedNodeNames[nodeId] ?? nodeId,
+        })),
         polling,
       },
     });
@@ -325,7 +399,11 @@ export default function Opcua() {
               </div>
             )}
             <div className="fwe-opcua-auth">
-              <div className="fwe-opcua-auth-options" role="radiogroup" aria-label="Authentication">
+              <div
+                className="fwe-opcua-auth-options"
+                role="radiogroup"
+                aria-label="Authentication"
+              >
                 <label>
                   <input
                     type="radio"
@@ -371,10 +449,14 @@ export default function Opcua() {
                 className="fwe-btn no-wrap"
                 aria-label="Test connection"
                 onClick={() => void testConnection()}
+                disabled={testing}
               >
                 <IconConnected />
                 Test connection
               </button>
+              {testing && (
+                <LoadingIndicator size="small">Loading ...</LoadingIndicator>
+              )}
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />
@@ -383,18 +465,24 @@ export default function Opcua() {
               )}
               {tested && valid && connectionStatus === "connected" && (
                 <span className="fwe-status fwe-status-connected">
-                  <IconConnected aria-hidden="true" />
+                  <IconCheckStatus aria-hidden="true" />
                   Connected
                 </span>
               )}
-              {tested && valid && connectionStatus === "disconnected" && connectionError && (
-                <div className="fwe-connection-error">
-                  <IconFailure />
-                  {connectionError}
-                </div>
-              )}
+              {tested &&
+                valid &&
+                connectionStatus === "disconnected" &&
+                connectionError && (
+                  <div className="fwe-connection-error">
+                    <IconFailure />
+                    {connectionError}
+                  </div>
+                )}
             </div>
-            <section className="fwe-opcua-browse" aria-labelledby="opcua-browse-heading">
+            <section
+              className="fwe-opcua-browse"
+              aria-labelledby="opcua-browse-heading"
+            >
               <h2 id="opcua-browse-heading">Browse Nodes</h2>
               {tested && !valid && (
                 <div className="fwe-opcua-error-ribbon" role="alert">
@@ -433,17 +521,23 @@ export default function Opcua() {
                           <input
                             type="checkbox"
                             checked={selectedNodeIds.includes(node.nodeId)}
-                            onChange={() => toggleNode(node.nodeId)}
+                            onChange={() =>
+                              toggleNode(node.nodeId, node.displayName)
+                            }
                           />
                           <span>{node.displayName}</span>
                         </label>
                       ) : (
                         <span>{node.displayName}</span>
                       )}
-                      <small>{node.nodeClass} - {node.nodeId}</small>
+                      <small>
+                        {node.nodeClass} - {node.nodeId}
+                      </small>
                       <button
                         type="button"
-                        onClick={() => void browse(node.nodeId, node.displayName)}
+                        onClick={() =>
+                          void browse(node.nodeId, node.displayName)
+                        }
                       >
                         Browse
                       </button>
@@ -461,7 +555,9 @@ export default function Opcua() {
                 />
                 <p>
                   Selected variables: {selectedNodeIds.length}
-                  {submitted && selectedNodeIds.length === 0 && " (select at least one NodeId)"}
+                  {submitted &&
+                    selectedNodeIds.length === 0 &&
+                    " (select at least one NodeId)"}
                 </p>
               </div>
             </section>

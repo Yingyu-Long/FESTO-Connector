@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LoadingIndicator } from "@festo-ui/react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
@@ -9,7 +10,9 @@ import { saveCurrentConfiguration } from "../configurationApi";
 export default function Beckhoff() {
   const location = useLocation();
   const navigate = useNavigate();
-  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
+  const editConnection = (
+    location.state as { connection?: SavedConnection } | null
+  )?.connection;
   const [values, setValues] = useState({
     id: editConnection?.id ?? "",
     host: editConnection?.host ?? "",
@@ -20,10 +23,13 @@ export default function Beckhoff() {
     sourcePort: configString(editConnection, "sourcePort", "32905"),
     polling: configString(editConnection, "polling", "500"),
   });
-  const [mode, setMode] = useState(configString(editConnection, "mode", "Automatic"));
+  const [mode, setMode] = useState(
+    configString(editConnection, "mode", "Automatic"),
+  );
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
   const [connectionFailed, setConnectionFailed] = useState(false);
+  const [testing, setTesting] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const valid = Boolean(
@@ -36,6 +42,14 @@ export default function Beckhoff() {
     values.sourcePort &&
     values.polling,
   );
+  const testConnection = async () => {
+    setTested(true);
+    if (!valid) return;
+    setTesting(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    setConnectionFailed(true);
+    setTesting(false);
+  };
   const save = async () => {
     setSubmitted(true);
     if (!valid) return;
@@ -119,14 +133,15 @@ export default function Beckhoff() {
                 type="button"
                 className="fwe-btn no-wrap"
                 aria-label="Test connection"
-                onClick={() => {
-                  setTested(true);
-                  setConnectionFailed(valid);
-                }}
+                onClick={() => void testConnection()}
+                disabled={testing}
               >
                 <IconConnected />
                 Test connection
               </button>
+              {testing && (
+                <LoadingIndicator size="small">Loading ...</LoadingIndicator>
+              )}
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />

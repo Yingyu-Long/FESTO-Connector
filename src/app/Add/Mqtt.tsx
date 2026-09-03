@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { IconCheckStatus, IconConnected, IconFailure } from "@festo-ui/react-icons";
+import { LoadingIndicator } from "@festo-ui/react";
+import {
+  IconCheckStatus,
+  IconConnected,
+  IconFailure,
+} from "@festo-ui/react-icons";
 import { useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { saveCurrentConfiguration } from "../configurationApi";
@@ -30,13 +35,27 @@ function readMqttConfig(): MqttConfig {
       localStorage.getItem("festo-mqtt-config") ?? "null",
     ) as Partial<MqttConfig> | null;
     return {
-      host: typeof saved?.host === "string" ? saved.host : defaultMqttConfig.host,
-      port: typeof saved?.port === "string" ? saved.port : defaultMqttConfig.port,
-      clientId: typeof saved?.clientId === "string" ? saved.clientId : defaultMqttConfig.clientId,
-      username: typeof saved?.username === "string" ? saved.username : defaultMqttConfig.username,
-      password: typeof saved?.password === "string" ? saved.password : defaultMqttConfig.password,
+      host:
+        typeof saved?.host === "string" ? saved.host : defaultMqttConfig.host,
+      port:
+        typeof saved?.port === "string" ? saved.port : defaultMqttConfig.port,
+      clientId:
+        typeof saved?.clientId === "string"
+          ? saved.clientId
+          : defaultMqttConfig.clientId,
+      username:
+        typeof saved?.username === "string"
+          ? saved.username
+          : defaultMqttConfig.username,
+      password:
+        typeof saved?.password === "string"
+          ? saved.password
+          : defaultMqttConfig.password,
       qos: typeof saved?.qos === "string" ? saved.qos : defaultMqttConfig.qos,
-      authType: typeof saved?.authType === "string" ? saved.authType : defaultMqttConfig.authType,
+      authType:
+        typeof saved?.authType === "string"
+          ? saved.authType
+          : defaultMqttConfig.authType,
     };
   } catch {
     return defaultMqttConfig;
@@ -98,7 +117,7 @@ export default function Mqtt() {
       setConnectionMessage(
         connected
           ? ""
-          : result.error ?? "The MQTT broker rejected the connection.",
+          : (result.error ?? "The MQTT broker rejected the connection."),
       );
       return connected;
     } catch (error) {
@@ -233,8 +252,11 @@ export default function Mqtt() {
                 disabled={connectionState === "checking"}
               >
                 <IconConnected />
-                {connectionState === "checking" ? "Testing connection..." : "Test connection"}
+                Test connection
               </button>
+              {connectionState === "checking" && (
+                <LoadingIndicator size="small">Loading ...</LoadingIndicator>
+              )}
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />

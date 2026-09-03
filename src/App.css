@@ -503,6 +503,37 @@
   display: flex;
   align-items: center;
 }
+.fwe-detail-items {
+  margin-top: 24px;
+  padding: 24px 40px;
+  background: var(--fwe-white);
+}
+.fwe-detail-items h3 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.fwe-detail-items ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fwe-detail-items li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--fwe-caerul);
+  background: var(--fwe-gray-100);
+}
+.fwe-detail-items li span {
+  color: var(--fwe-text-light);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .fwe-mqtt-heading {
   margin-top: 48px;
 }

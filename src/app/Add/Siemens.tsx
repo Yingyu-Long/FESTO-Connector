@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { IconCheckStatus, IconConnected, IconFailure } from "@festo-ui/react-icons";
+import { LoadingIndicator } from "@festo-ui/react";
+import {
+  IconCheckStatus,
+  IconConnected,
+  IconFailure,
+} from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, saveConnection } from "./storage";
@@ -16,13 +21,19 @@ type DataBlock = {
 function isDataBlock(value: unknown): value is DataBlock {
   if (typeof value !== "object" || value === null) return false;
   const dataBlock = value as Partial<DataBlock>;
-  return typeof dataBlock.id === "number" && typeof dataBlock.dataBlock === "string" && typeof dataBlock.polling === "string";
+  return (
+    typeof dataBlock.id === "number" &&
+    typeof dataBlock.dataBlock === "string" &&
+    typeof dataBlock.polling === "string"
+  );
 }
 
 export default function Siemens() {
   const location = useLocation();
   const navigate = useNavigate();
-  const editConnection = (location.state as { connection?: SavedConnection } | null)?.connection;
+  const editConnection = (
+    location.state as { connection?: SavedConnection } | null
+  )?.connection;
   const savedBlocks = editConnection?.config?.dataBlocks;
   const [values, setValues] = useState({
     id: editConnection?.id ?? "",
@@ -33,13 +44,16 @@ export default function Siemens() {
   });
   const [dataBlocks, setDataBlocks] = useState<DataBlock[]>([
     ...(Array.isArray(savedBlocks) ? savedBlocks.filter(isDataBlock) : []),
-    ...(!Array.isArray(savedBlocks) || savedBlocks.filter(isDataBlock).length === 0
+    ...(!Array.isArray(savedBlocks) ||
+    savedBlocks.filter(isDataBlock).length === 0
       ? [{ id: 0, dataBlock: "", polling: "" }]
       : []),
   ]);
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<SavedConnection["status"]>("disconnected");
+  const [connectionStatus, setConnectionStatus] =
+    useState<SavedConnection["status"]>("disconnected");
+  const [testing, setTesting] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const setDataBlock =
@@ -87,6 +101,7 @@ export default function Siemens() {
     };
   };
   const connectToBackend = async () => {
+    setTesting(true);
     try {
       const response = await fetch("/api/plcs/siemens/connect", {
         method: "POST",
@@ -94,12 +109,15 @@ export default function Siemens() {
         body: JSON.stringify(buildBackendConfig()),
       });
       const result = (await response.json()) as { connected?: boolean };
-      const status = response.ok && result.connected ? "connected" : "disconnected";
+      const status =
+        response.ok && result.connected ? "connected" : "disconnected";
       setConnectionStatus(status);
       return status;
     } catch {
       setConnectionStatus("disconnected");
       return "disconnected" as const;
+    } finally {
+      setTesting(false);
     }
   };
   const save = async () => {
@@ -178,10 +196,14 @@ export default function Siemens() {
                   setTested(true);
                   if (valid) await connectToBackend();
                 }}
+                disabled={testing}
               >
                 <IconConnected />
                 Test connection
               </button>
+              {testing && (
+                <LoadingIndicator size="small">Loading ...</LoadingIndicator>
+              )}
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />

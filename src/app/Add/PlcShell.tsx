@@ -125,7 +125,9 @@ export function Field({
   className?: string;
 }) {
   return (
-    <label className={`fwe-field ${className ?? ""} ${invalid ? "is-invalid" : ""}`}>
+    <label
+      className={`fwe-field ${className ?? ""} ${invalid ? "is-invalid" : ""}`}
+    >
       <span>
         {label}
         {required ? " *" : ""}
@@ -162,7 +164,9 @@ export function SelectField({
   className?: string;
 }) {
   return (
-    <label className={`fwe-field ${className ?? ""} ${invalid ? "is-invalid" : ""}`}>
+    <label
+      className={`fwe-field ${className ?? ""} ${invalid ? "is-invalid" : ""}`}
+    >
       <span>
         {label}
         {required ? " *" : ""}
@@ -195,7 +199,9 @@ export function FormActions({
     try {
       await onSave();
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "Unable to save configuration");
+      setSaveError(
+        error instanceof Error ? error.message : "Unable to save configuration",
+      );
     } finally {
       setSaving(false);
     }
