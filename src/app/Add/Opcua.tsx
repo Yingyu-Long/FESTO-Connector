@@ -7,6 +7,14 @@ import { configString, saveConnection } from "./storage";
 import type { SavedConnection } from "./storage";
 import { saveCurrentConfiguration } from "../configurationApi";
 
+type BrowsedNode = {
+  nodeId: string;
+  browseName: string;
+  displayName: string;
+  nodeClass: string;
+  selectable: boolean;
+};
+
 type CertificateFieldProps = {
   label: string;
   value: string;
@@ -63,6 +71,23 @@ export default function Opcua() {
   const [authType, setAuthType] = useState(configString(editConnection, "authType", "None"));
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
+  const [connectionStatus, setConnectionStatus] =
+    useState<SavedConnection["status"]>("disconnected");
+  const [connectionError, setConnectionError] = useState("");
+  const [browseNodes, setBrowseNodes] = useState<BrowsedNode[]>([]);
+  const [browsePath, setBrowsePath] = useState([
+    { nodeId: "RootFolder", label: "Root" },
+  ]);
+  const [browsing, setBrowsing] = useState(false);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(() => {
+    const saved = editConnection?.config?.nodeIds;
+    return Array.isArray(saved)
+      ? saved.filter((nodeId): nodeId is string => typeof nodeId === "string")
+      : [];
+  });
+  const [polling, setPolling] = useState(
+    configString(editConnection, "polling", "500"),
+  );
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const setCertificate = (key: keyof typeof certificates) => (value: string) =>
@@ -86,9 +111,106 @@ export default function Opcua() {
     certificatesValid &&
     (authType === "None" || (values.username && values.password)),
   );
+  const subscriptionValid = valid && selectedNodeIds.length > 0 && Boolean(polling);
+  const buildBackendConfig = () => {
+    let mqtt: Record<string, unknown> | undefined;
+    try {
+      const savedMqtt = JSON.parse(
+        localStorage.getItem("festo-mqtt-config") ?? "null",
+      ) as Record<string, unknown> | null;
+      if (savedMqtt && typeof savedMqtt.host === "string" && savedMqtt.host) {
+        mqtt = savedMqtt;
+      }
+    } catch {
+      mqtt = undefined;
+    }
+
+    return {
+      id: values.id,
+      host: values.host,
+      port: Number(values.port),
+      server: values.server,
+      securityMode,
+      securityPolicy,
+      authType,
+      polling: Number(polling),
+      nodeIds: selectedNodeIds,
+      mqtt,
+      mqttTopic: `festo/plc/${values.id}`,
+    };
+  };
+  const testConnection = async () => {
+    setTested(true);
+    setConnectionError("");
+    if (!valid) return;
+
+    try {
+      const response = await fetch("/api/plcs/opcua/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildBackendConfig()),
+      });
+      const result = (await response.json()) as { connected?: boolean; error?: string };
+      if (!response.ok || !result.connected) {
+        setConnectionStatus("disconnected");
+        setConnectionError(result.error ?? "Unable to connect to OPC UA server");
+        return;
+      }
+      setConnectionStatus("connected");
+    } catch {
+      setConnectionStatus("disconnected");
+      setConnectionError("Unable to reach the PLC backend");
+    }
+  };
+  const browse = async (nodeId = "RootFolder", label = "Root") => {
+    setBrowsing(true);
+    setConnectionError("");
+    try {
+      const response = await fetch("/api/plcs/opcua/browse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...buildBackendConfig(), nodeId }),
+      });
+      const result = (await response.json()) as { nodes?: BrowsedNode[]; error?: string };
+      if (!response.ok || !result.nodes) {
+        setConnectionError(result.error ?? "Unable to browse OPC UA nodes");
+        return;
+      }
+      setBrowseNodes(result.nodes);
+      setBrowsePath((current) =>
+        nodeId === "RootFolder"
+          ? [{ nodeId, label }]
+          : [...current, { nodeId, label }],
+      );
+    } catch {
+      setConnectionError("Unable to reach the PLC backend");
+    } finally {
+      setBrowsing(false);
+    }
+  };
+  const toggleNode = (nodeId: string) => {
+    setSelectedNodeIds((current) =>
+      current.includes(nodeId)
+        ? current.filter((item) => item !== nodeId)
+        : [...current, nodeId],
+    );
+  };
+  const connectToBackend = async () => {
+    const response = await fetch("/api/plcs/opcua/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildBackendConfig()),
+    });
+    const result = (await response.json()) as { connected?: boolean; error?: string };
+    if (!response.ok || !result.connected) {
+      throw new Error(result.error ?? "Unable to start OPC UA subscription");
+    }
+    return "connected" as const;
+  };
   const save = async () => {
     setSubmitted(true);
-    if (!valid) return;
+    if (!subscriptionValid) return;
+    const status = await connectToBackend();
     saveConnection({
       recordId: editConnection?.recordId,
       id: values.id,
@@ -96,7 +218,7 @@ export default function Opcua() {
       host: values.host,
       port: values.port,
       details: `server: ${values.server || "default"}, security: ${securityMode}/${securityPolicy}, authentication: ${authType}`,
-      status: "disconnected",
+      status,
       editPath: "/add/opcua",
       config: {
         ...values,
@@ -104,6 +226,8 @@ export default function Opcua() {
         securityMode,
         securityPolicy,
         authType,
+        nodeIds: selectedNodeIds,
+        polling,
       },
     });
     await saveCurrentConfiguration();
@@ -246,7 +370,7 @@ export default function Opcua() {
                 type="button"
                 className="fwe-btn no-wrap"
                 aria-label="Test connection"
-                onClick={() => setTested(true)}
+                onClick={() => void testConnection()}
               >
                 <IconConnected />
                 Test connection
@@ -255,6 +379,18 @@ export default function Opcua() {
                 <div className="fwe-connection-error">
                   <IconFailure />
                   Please fill in all required fields to continue.
+                </div>
+              )}
+              {tested && valid && connectionStatus === "connected" && (
+                <span className="fwe-status fwe-status-connected">
+                  <IconConnected aria-hidden="true" />
+                  Connected
+                </span>
+              )}
+              {tested && valid && connectionStatus === "disconnected" && connectionError && (
+                <div className="fwe-connection-error">
+                  <IconFailure />
+                  {connectionError}
                 </div>
               )}
             </div>
@@ -266,19 +402,73 @@ export default function Opcua() {
                   Please fill in all required fields to continue.
                 </div>
               )}
+              {connectionError && tested && valid && (
+                <div className="fwe-opcua-error-ribbon" role="alert">
+                  <IconFailure />
+                  {connectionError}
+                </div>
+              )}
               <p>You can browse nodes after a successful connection test.</p>
               <Button
                 type="button"
-                disabled
-                title="OPC UA node browsing is not implemented by the backend yet"
+                disabled={connectionStatus !== "connected" || browsing}
+                onClick={() => void browse()}
               >
-                Start Browsing
+                {browsing ? "Browsing..." : "Start Browsing"}
               </Button>
+              {browseNodes.length > 0 && (
+                <div className="fwe-opcua-node-browser">
+                  <div className="fwe-opcua-browser-header">
+                    <span>Location: {browsePath.at(-1)?.label ?? "Root"}</span>
+                    {browsePath.length > 1 && (
+                      <button type="button" onClick={() => void browse()}>
+                        Back to root
+                      </button>
+                    )}
+                  </div>
+                  {browseNodes.map((node) => (
+                    <div className="fwe-opcua-node-row" key={node.nodeId}>
+                      {node.selectable ? (
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={selectedNodeIds.includes(node.nodeId)}
+                            onChange={() => toggleNode(node.nodeId)}
+                          />
+                          <span>{node.displayName}</span>
+                        </label>
+                      ) : (
+                        <span>{node.displayName}</span>
+                      )}
+                      <small>{node.nodeClass} - {node.nodeId}</small>
+                      <button
+                        type="button"
+                        onClick={() => void browse(node.nodeId, node.displayName)}
+                      >
+                        Browse
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="fwe-opcua-subscription-fields">
+                <Field
+                  label="Polling interval"
+                  value={polling}
+                  onChange={setPolling}
+                  invalid={submitted && !polling}
+                  suffix="ms"
+                />
+                <p>
+                  Selected variables: {selectedNodeIds.length}
+                  {submitted && selectedNodeIds.length === 0 && " (select at least one NodeId)"}
+                </p>
+              </div>
             </section>
           </form>
         </section>
         <FormActions
-          valid={valid}
+          valid={subscriptionValid}
           onSave={save}
           onCancel={() => navigate("/add")}
         />

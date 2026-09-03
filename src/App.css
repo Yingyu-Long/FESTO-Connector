@@ -962,6 +962,14 @@ button:focus-visible {
   line-height: normal;
   cursor: pointer;
 }
+.fwe-test-row .fwe-btn {
+  flex: 0 0 auto;
+  min-width: 154px;
+}
+.fwe-test-row .fwe-status,
+.fwe-test-row .fwe-connection-error {
+  min-width: 0;
+}
 .fwe-test-row .fwe-btn:hover,
 .fwe-test-row .fwe-btn:focus-visible,
 .fwe-opcua-browse .fwe-btn:hover,
@@ -974,6 +982,66 @@ button:focus-visible {
   color: var(--fwe-text-disabled);
   background: var(--fwe-gray-200);
   cursor: default;
+}
+.fwe-opcua-node-browser {
+  max-width: 920px;
+  margin-top: 20px;
+  border: 1px solid var(--fwe-border);
+}
+.fwe-opcua-browser-header,
+.fwe-opcua-node-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 16px;
+}
+.fwe-opcua-browser-header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--fwe-text-light);
+  background: var(--fwe-background);
+  font-size: 14px;
+}
+.fwe-opcua-browser-header button,
+.fwe-opcua-node-row button {
+  border: 0;
+  padding: 4px 8px;
+  color: var(--fwe-hero);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.fwe-opcua-node-row {
+  border-top: 1px solid var(--fwe-border);
+}
+.fwe-opcua-node-row label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+.fwe-opcua-node-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--fwe-hero);
+}
+.fwe-opcua-node-row small {
+  overflow: hidden;
+  color: var(--fwe-text-light);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fwe-opcua-subscription-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+  align-items: end;
+  margin-top: 24px;
+}
+.fwe-opcua-subscription-fields p {
+  margin: 0 0 4px;
+  color: var(--fwe-text-light);
 }
 .fwe-add-more,
 .fwe-delete-button {

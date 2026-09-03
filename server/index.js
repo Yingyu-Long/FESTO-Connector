@@ -3,6 +3,8 @@ import express from "express";
 import "dotenv/config";
 import { query } from "./database.js";
 import { testMqttConnection } from "./mqttPublisher.js";
+import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
+import { startOpcuaPoller, stopOpcuaPoller } from "./plc/opcuaPoller.js";
 import { startSiemensPoller, stopSiemensPoller } from "./plc/poller.js";
 
 const app = express();
@@ -178,6 +180,66 @@ app.post("/api/plcs/siemens/connect", async (request, response) => {
 
 app.delete("/api/plcs/siemens/:id", (request, response) => {
   stopSiemensPoller(request.params.id);
+  response.status(204).end();
+});
+
+function hasOpcuaEndpoint(config) {
+  return Boolean(config?.host && config?.port);
+}
+
+function opcuaError(response, error) {
+  response.status(502).json({
+    connected: false,
+    error:
+      error instanceof Error ? error.message : "Unable to connect to OPC UA server",
+  });
+}
+
+app.post("/api/plcs/opcua/test", async (request, response) => {
+  if (!hasOpcuaEndpoint(request.body)) {
+    response.status(400).json({ connected: false, error: "OPC UA host and port are required" });
+    return;
+  }
+
+  try {
+    await testOpcuaConnection(request.body);
+    response.json({ connected: true });
+  } catch (error) {
+    opcuaError(response, error);
+  }
+});
+
+app.post("/api/plcs/opcua/browse", async (request, response) => {
+  if (!hasOpcuaEndpoint(request.body)) {
+    response.status(400).json({ error: "OPC UA host and port are required" });
+    return;
+  }
+
+  try {
+    const nodes = await browseOpcuaNodes(request.body, request.body.nodeId);
+    response.json({ nodes });
+  } catch (error) {
+    opcuaError(response, error);
+  }
+});
+
+app.post("/api/plcs/opcua/connect", async (request, response) => {
+  const config = request.body;
+  if (!hasOpcuaEndpoint(config) || !config?.id || !Array.isArray(config.nodeIds) || config.nodeIds.length === 0) {
+    response.status(400).json({ connected: false, error: "OPC UA id, endpoint, and at least one NodeId are required" });
+    return;
+  }
+
+  try {
+    await startOpcuaPoller(config);
+    response.json({ connected: true, plcId: config.id });
+  } catch (error) {
+    opcuaError(response, error);
+  }
+});
+
+app.delete("/api/plcs/opcua/:id", async (request, response) => {
+  await stopOpcuaPoller(request.params.id);
   response.status(204).end();
 });
 
