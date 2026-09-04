@@ -76,6 +76,7 @@ function getMessageSourceConfiguration(connection: SavedConnection) {
       s7PniConfiguration: {
         dbs,
         defaultPollingRate: String(polling ?? config.polling ?? "500"),
+        messageLayout: String(config.messageLayout ?? "mip"),
       },
     };
   }

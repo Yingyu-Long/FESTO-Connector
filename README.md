@@ -9,7 +9,7 @@ The browser is only used to configure and monitor connections. The Node.js backe
 - Stores connector configuration in PostgreSQL.
 - Connects to Siemens S7 PLCs and reads configured data blocks.
 - Connects to OPC UA servers and subscribes to selected variable NodeIds.
-- Publishes PLC data to MQTT topics such as `festo/plc/<PLC_ID>`.
+- Publishes Siemens S7 PLC data to topics such as `festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID>`.
 - Lets users test, save, rescan, import, and export PLC and MQTT configurations from a web dashboard.
 
 Siemens S7 and OPC UA have active backend connection support. Beckhoff ADS and Rockwell EIP can be configured in the UI, but their backend drivers are not implemented yet.
@@ -27,7 +27,7 @@ Web server + Node.js backend
   |
   +--> Siemens S7 PLC or OPC UA server
   |
-  +--> MQTT broker: festo/plc/<PLC_ID>
+  +--> MQTT broker: festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID> (Siemens S7)
 ```
 
 ## Deploy on a new computer
@@ -137,7 +137,7 @@ Reload Nginx, then open `http://connector.example.local` from a browser. Add TLS
 2. Configure and test the MQTT broker.
 3. Add a Siemens S7 or OPC UA PLC connection.
 4. Test the connection, select S7 data blocks or OPC UA nodes, then save it.
-5. Confirm that the dashboard status is `Connected` and that MQTT messages arrive on `festo/plc/<PLC_ID>`.
+5. Confirm that the dashboard status is `Connected` and that Siemens S7 MQTT messages arrive on `festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID>`.
 
 For many S7-1200/1500 installations, the initial values are port `102`, rack `0`, and slot `1`. The actual values depend on the PLC model and TIA Portal configuration. The PLC must allow the required external S7 communication.
 
@@ -157,12 +157,18 @@ During development, Vite proxies `/api` requests to `http://localhost:3001`.
 
 ## MQTT payloads
 
-Siemens data is published as raw Base64 data. OPC UA messages contain the selected NodeId, value, data type, timestamp, and status code.
+For Siemens MIP connections, enter the numeric DB in the configuration page, for example `DB1`. The connector reads `scylinderID`, `sValveID`, and `sValveterminalID` from that DB and publishes to:
+
+```text
+festo-ax/pni/<sValveterminalID>/<sValveID>/<scylinderID>
+```
+
+The MQTT JSON message contains the eight `TIME` values from offsets `500` through `528`, plus `udiCycleCounter` from offset `532`. `TIME` values are signed milliseconds as stored by the PLC. OPC UA messages contain the selected NodeId, value, data type, timestamp, and status code.
 
 Subscribe to all PLC topics with Mosquitto:
 
 ```bash
-mosquitto_sub -h localhost -p 1883 -t 'festo/plc/#' -v
+mosquitto_sub -h localhost -p 1883 -t 'festo-ax/pni/#' -v
 ```
 
 ## API overview
@@ -183,6 +189,6 @@ mosquitto_sub -h localhost -p 1883 -t 'festo/plc/#' -v
 - PLC pollers are kept in memory and are not restored automatically after a backend restart.
 - Beckhoff ADS and Rockwell EIP backend drivers are not implemented.
 - OPC UA currently supports anonymous connections with no security mode or security policy.
-- The Siemens backend reads raw data blocks; it does not decode bytes into named tags or data types.
+- Siemens MIP mode expects the fixed `FB_MIP_DB` field layout configured in the application.
 - The Siemens backend uses Snap7 `ConnectTo(host, rack, slot)`; the port field is saved for configuration but is not passed to Snap7.
 - Protect the API and database because saved configuration can contain MQTT credentials.

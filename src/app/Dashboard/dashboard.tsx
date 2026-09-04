@@ -39,6 +39,19 @@ type DetailItem = {
   value: string;
 };
 
+type S7DataBlockStatus = {
+  dataBlock: number | string;
+  cylinderId?: string;
+  valveId?: string;
+  valveTerminalId?: string;
+};
+
+type S7PollingStatus = {
+  pollingStatus: string;
+  dataBlocks: S7DataBlockStatus[];
+  error?: string;
+};
+
 type RescanResult = {
   connection: SavedConnection;
   status: SavedConnection["status"];
@@ -181,8 +194,9 @@ async function reconnect(connection: SavedConnection): Promise<RescanResult> {
       slot: Number(config.slot ?? 1),
       polling: Number(dataBlocks[0]?.polling ?? config.polling ?? 500),
       dataBlocks,
+      messageLayout: String(config.messageLayout ?? "mip"),
       mqtt: readMqttConfig(),
-      mqttTopic: `festo/plc/${connection.id}`,
+      mqttTopic: `festo-ax/pni/${connection.id}`,
     };
   } else if (connection.protocol === "opc.tcp") {
     endpoint = "/api/plcs/opcua/connect";
@@ -379,7 +393,105 @@ function hasDisplayableDetails(connection: SavedConnection) {
   );
 }
 
-function ConnectionDetails({ connection }: { connection: SavedConnection }) {
+function configuredS7DataBlocks(
+  connection: SavedConnection,
+): S7DataBlockStatus[] {
+  const dataBlocks = connection.config?.dataBlocks;
+  if (!Array.isArray(dataBlocks)) return [];
+
+  return dataBlocks.flatMap((block) => {
+    if (typeof block !== "object" || block === null) return [];
+    const value = block as Record<string, unknown>;
+    const range = value.dataBlock ?? value.range;
+    if (typeof range !== "string" || !range) return [];
+    return [{ dataBlock: range.replace(/^DB/i, "") }];
+  });
+}
+
+function S7PollingLabel({ status }: { status: S7PollingStatus }) {
+  const pollingStatus = status.pollingStatus || "METRICS_IN_CALCULATION";
+  const isHealthy = pollingStatus === "HEALTHY";
+  const isWarning = pollingStatus === "METRICS_IN_CALCULATION";
+
+  return (
+    <span
+      className={`fwe-s7-polling-status${isHealthy ? " is-healthy" : ""}${isWarning ? " is-warning" : ""}`}
+      title={status.error}
+    >
+      {isHealthy ? (
+        <IconCheckStatus aria-hidden="true" />
+      ) : isWarning ? (
+        <IconRefresh aria-hidden="true" />
+      ) : (
+        <IconFailure aria-hidden="true" />
+      )}
+      {pollingStatus.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+function S7DataBlockDetails({
+  connection,
+  status,
+}: {
+  connection: SavedConnection;
+  status?: S7PollingStatus;
+}) {
+  const dataBlocks = status?.dataBlocks.length
+    ? status.dataBlocks
+    : configuredS7DataBlocks(connection);
+  const pollingStatus = status ?? {
+    pollingStatus: "METRICS_IN_CALCULATION",
+    dataBlocks: [],
+  };
+
+  return (
+    <section className="fwe-s7-data-blocks" aria-label="S7 data block status">
+      <div className="fwe-s7-data-blocks-scroll">
+        <table className="fwe-s7-data-blocks-table">
+          <thead>
+            <tr>
+              <th>Data Block</th>
+              <th>Cylinder Id</th>
+              <th>Valve Id</th>
+              <th>Valve Terminal Id</th>
+              <th>Polling Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dataBlocks.map((dataBlock) => (
+              <tr key={String(dataBlock.dataBlock)}>
+                <td>{String(dataBlock.dataBlock).replace(/^DB/i, "")}</td>
+                <td>{dataBlock.cylinderId || "--"}</td>
+                <td>{dataBlock.valveId || "--"}</td>
+                <td>{dataBlock.valveTerminalId || "--"}</td>
+                <td>
+                  <S7PollingLabel status={pollingStatus} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ConnectionDetails({
+  connection,
+  s7Status,
+}: {
+  connection: SavedConnection;
+  s7Status?: S7PollingStatus;
+}) {
+  if (connection.protocol === "s7") {
+    return (
+      <div className="fwe-details">
+        <S7DataBlockDetails connection={connection} status={s7Status} />
+      </div>
+    );
+  }
+
   const items = connectionDetailItems(connection);
   const heading =
     connection.protocol === "opc.tcp"
@@ -426,7 +538,43 @@ export default function Dashboard() {
   const [connections, setConnections] =
     useState<SavedConnection[]>(readConnections);
   const [rescanningKeys, setRescanningKeys] = useState<string[]>([]);
+  const [s7Statuses, setS7Statuses] = useState<Record<string, S7PollingStatus>>(
+    {},
+  );
   const navigate = useNavigate();
+
+  const expandedConnection =
+    expandedIndex === null ? null : (connections[expandedIndex] ?? null);
+
+  useEffect(() => {
+    if (!expandedConnection || expandedConnection.protocol !== "s7") return;
+
+    let cancelled = false;
+    const loadStatus = async () => {
+      try {
+        const response = await fetch(
+          `/api/plcs/siemens/${encodeURIComponent(expandedConnection.id)}/status`,
+        );
+        if (!response.ok || cancelled) return;
+        const status = (await response.json()) as S7PollingStatus;
+        if (!cancelled) {
+          setS7Statuses((current) => ({
+            ...current,
+            [expandedConnection.id]: status,
+          }));
+        }
+      } catch {
+        // The connection row already reports the last known PLC status.
+      }
+    };
+
+    void loadStatus();
+    const timer = window.setInterval(() => void loadStatus(), 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [expandedConnection]);
   useEffect(() => {
     const refreshConnections = () => {
       setConnections(readConnections());
@@ -806,7 +954,10 @@ export default function Dashboard() {
                             key={`${connection.protocol}-${connection.id}-${index}-details`}
                           >
                             <td colSpan={8}>
-                              <ConnectionDetails connection={connection} />
+                              <ConnectionDetails
+                                connection={connection}
+                                s7Status={s7Statuses[connection.id]}
+                              />
                             </td>
                           </tr>
                         )}

@@ -72,6 +72,7 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
         rack: uri.searchParams.get("remote-rack") ?? "0",
         slot: uri.searchParams.get("remote-slot") ?? "1",
         dataBlocks,
+        messageLayout: String(configuration.messageLayout ?? "mip"),
       },
     };
   }

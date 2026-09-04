@@ -5,7 +5,11 @@ import { query } from "./database.js";
 import { testMqttConnection } from "./mqttPublisher.js";
 import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
 import { startOpcuaPoller, stopOpcuaPoller } from "./plc/opcuaPoller.js";
-import { startSiemensPoller, stopSiemensPoller } from "./plc/poller.js";
+import {
+  getSiemensPollerStatus,
+  startSiemensPoller,
+  stopSiemensPoller,
+} from "./plc/poller.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -167,6 +171,7 @@ app.post("/api/plcs/siemens/connect", async (request, response) => {
     await startSiemensPoller(config);
     response.json({ connected: true, plcId: config.id });
   } catch (error) {
+    console.error(`Siemens PLC ${config.id} connection failed`, error);
     response.status(502).json({
       connected: false,
       plcId: config.id,
@@ -176,6 +181,10 @@ app.post("/api/plcs/siemens/connect", async (request, response) => {
           : "Unable to connect to Siemens PLC",
     });
   }
+});
+
+app.get("/api/plcs/siemens/:id/status", (request, response) => {
+  response.json(getSiemensPollerStatus(request.params.id));
 });
 
 app.delete("/api/plcs/siemens/:id", (request, response) => {
@@ -191,13 +200,17 @@ function opcuaError(response, error) {
   response.status(502).json({
     connected: false,
     error:
-      error instanceof Error ? error.message : "Unable to connect to OPC UA server",
+      error instanceof Error
+        ? error.message
+        : "Unable to connect to OPC UA server",
   });
 }
 
 app.post("/api/plcs/opcua/test", async (request, response) => {
   if (!hasOpcuaEndpoint(request.body)) {
-    response.status(400).json({ connected: false, error: "OPC UA host and port are required" });
+    response
+      .status(400)
+      .json({ connected: false, error: "OPC UA host and port are required" });
     return;
   }
 
@@ -225,8 +238,18 @@ app.post("/api/plcs/opcua/browse", async (request, response) => {
 
 app.post("/api/plcs/opcua/connect", async (request, response) => {
   const config = request.body;
-  if (!hasOpcuaEndpoint(config) || !config?.id || !Array.isArray(config.nodeIds) || config.nodeIds.length === 0) {
-    response.status(400).json({ connected: false, error: "OPC UA id, endpoint, and at least one NodeId are required" });
+  if (
+    !hasOpcuaEndpoint(config) ||
+    !config?.id ||
+    !Array.isArray(config.nodeIds) ||
+    config.nodeIds.length === 0
+  ) {
+    response
+      .status(400)
+      .json({
+        connected: false,
+        error: "OPC UA id, endpoint, and at least one NodeId are required",
+      });
     return;
   }
 

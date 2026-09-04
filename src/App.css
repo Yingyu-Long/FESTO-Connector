@@ -503,6 +503,55 @@
   display: flex;
   align-items: center;
 }
+.fwe-s7-data-blocks {
+  padding: 32px 40px;
+  background: var(--fwe-white);
+}
+.fwe-s7-data-blocks-scroll {
+  overflow-x: auto;
+}
+.fwe-s7-data-blocks-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  color: var(--fwe-text);
+  text-align: left;
+}
+.fwe-s7-data-blocks-table th,
+.fwe-s7-data-blocks-table td {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--fwe-border);
+  vertical-align: middle;
+}
+.fwe-s7-data-blocks-table th {
+  font-size: 14px;
+  font-weight: 700;
+}
+.fwe-s7-data-blocks-table td {
+  font-size: 16px;
+}
+.fwe-s7-data-blocks-table tr:last-child td {
+  border-bottom: 0;
+}
+.fwe-s7-polling-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fwe-red);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fwe-s7-polling-status svg {
+  width: 16px;
+  height: 16px;
+}
+.fwe-s7-polling-status.is-healthy {
+  color: var(--fwe-green, #80ca3d);
+}
+.fwe-s7-polling-status.is-warning {
+  color: #8a6600;
+}
 .fwe-detail-items {
   margin-top: 24px;
   padding: 24px 40px;

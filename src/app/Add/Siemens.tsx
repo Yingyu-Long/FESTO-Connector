@@ -43,7 +43,7 @@ export default function Siemens() {
     slot: configString(editConnection, "slot", "1"),
   });
   const [dataBlocks, setDataBlocks] = useState<DataBlock[]>([
-    ...(Array.isArray(savedBlocks) ? savedBlocks.filter(isDataBlock) : []),
+    ...(Array.isArray(savedBlocks) ? savedBlocks.filter(isDataBlock).slice(0, 1) : []),
     ...(!Array.isArray(savedBlocks) ||
     savedBlocks.filter(isDataBlock).length === 0
       ? [{ id: 0, dataBlock: "", polling: "" }]
@@ -53,6 +53,7 @@ export default function Siemens() {
   const [tested, setTested] = useState(false);
   const [connectionStatus, setConnectionStatus] =
     useState<SavedConnection["status"]>("disconnected");
+  const [connectionError, setConnectionError] = useState("");
   const [testing, setTesting] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -96,8 +97,9 @@ export default function Siemens() {
         polling: Number(item.polling),
         ...(item.size ? { size: Number(item.size) } : {}),
       })),
+      messageLayout: "mip",
       mqtt,
-      mqttTopic: `festo/plc/${values.id}`,
+      mqttTopic: `festo-ax/pni/${values.id}`,
     };
   };
   const connectToBackend = async () => {
@@ -108,13 +110,22 @@ export default function Siemens() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildBackendConfig()),
       });
-      const result = (await response.json()) as { connected?: boolean };
+      const result = (await response.json()) as {
+        connected?: boolean;
+        error?: string;
+      };
       const status =
         response.ok && result.connected ? "connected" : "disconnected";
       setConnectionStatus(status);
+      setConnectionError(
+        status === "connected"
+          ? ""
+          : (result.error ?? "Unable to connect to the Siemens PLC."),
+      );
       return status;
     } catch {
       setConnectionStatus("disconnected");
+      setConnectionError("Unable to reach the PLC connection service.");
       return "disconnected" as const;
     } finally {
       setTesting(false);
@@ -133,7 +144,7 @@ export default function Siemens() {
       details: `remote-rack: ${values.rack}, remote-slot: ${values.slot}, data-blocks: ${dataBlocks.map((item) => `${item.dataBlock}, polling: ${item.polling} ms`).join("; ")}`,
       status,
       editPath: "/add/siemens",
-      config: { ...values, dataBlocks },
+      config: { ...values, dataBlocks, messageLayout: "mip" },
     });
     await saveCurrentConfiguration();
     navigate("/dashboard");
@@ -219,22 +230,22 @@ export default function Siemens() {
               {tested && valid && connectionStatus === "disconnected" && (
                 <span className="fwe-status">
                   <IconFailure aria-hidden="true" />
-                  Connection failed
+                  {connectionError || "Connection failed"}
                 </span>
               )}
             </div>
             <div className="fwe-data-heading">
-              <h2>Data blocks</h2>
+              <h2>MIP data block</h2>
             </div>
             <div className="fwe-data-blocks">
               {dataBlocks.map((item, index) => (
                 <div className="fwe-data-block-row" key={item.id}>
                   <Field
-                    label="Data block(s)"
+                    label="Data block"
                     value={item.dataBlock}
                     onChange={setDataBlock(index, "dataBlock")}
                     invalid={submitted && !item.dataBlock}
-                    help="Custom range e.g. 1-200 or number"
+                    help="DB containing FB_MIP_DB, for example DB1"
                   />
                   <Field
                     label="Polling interval"
@@ -247,18 +258,6 @@ export default function Siemens() {
                 </div>
               ))}
             </div>
-            <button
-              type="button"
-              className="fwe-add-more"
-              onClick={() =>
-                setDataBlocks((current) => [
-                  ...current,
-                  { id: current.length, dataBlock: "", polling: "" },
-                ])
-              }
-            >
-              ＋ Add more
-            </button>
           </form>
         </section>
         <FormActions
