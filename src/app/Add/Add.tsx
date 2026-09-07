@@ -106,6 +106,7 @@ export default function Add() {
               <option value="/add/rockwell">Rockwell</option>
               <option value="/add/opcua">OPC UA</option>
               <option value="/add/beckhoff">Beckhoff</option>
+              <option value="/add/modbus">Modbus TCP</option>
             </select>
             <p>Select a PLC type to continue</p>
           </div>

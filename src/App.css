@@ -1239,6 +1239,39 @@ button:focus-visible {
   gap: 24px 48px;
   margin-bottom: 24px;
 }
+.fwe-modbus-connection-fields .fwe-field {
+  width: 150px;
+}
+.fwe-modbus-connection-fields .fwe-field:nth-child(2) {
+  width: 300px;
+}
+.fwe-modbus-help {
+  margin: -4px 0 16px;
+  color: var(--fwe-text-light);
+  font-size: 14px;
+}
+.fwe-modbus-registers {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.fwe-modbus-register-row {
+  display: grid;
+  grid-template-columns:
+    minmax(130px, 1fr) minmax(150px, 1.2fr) minmax(90px, 0.7fr)
+    minmax(110px, 0.8fr) auto;
+  gap: 20px;
+  align-items: start;
+}
+.fwe-modbus-register-row .fwe-delete-button {
+  margin-top: 22px;
+}
+.fwe-modbus-polling {
+  margin-top: 32px;
+}
+.fwe-modbus-polling .fwe-field {
+  width: 200px;
+}
 .fwe-opcua-protocol-field {
   min-width: 100px;
 }
@@ -1404,6 +1437,13 @@ button:focus-visible {
   .fwe-block-field,
   .fwe-polling-field {
     width: min(100%, 300px);
+  }
+  .fwe-modbus-register-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fwe-modbus-register-row .fwe-delete-button {
+    justify-self: start;
+    margin-top: 0;
   }
 }
 @media (max-width: 480px) {

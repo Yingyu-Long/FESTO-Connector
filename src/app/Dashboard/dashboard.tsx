@@ -62,6 +62,7 @@ const editPaths: Record<string, string> = {
   eip: "/add/rockwell",
   ads: "/add/beckhoff",
   "opc.tcp": "/add/opcua",
+  "modbus.tcp": "/add/modbus",
 };
 const downloadsUrl =
   "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
@@ -380,6 +381,21 @@ function connectionDetailItems(connection: SavedConnection): DetailItem[] {
     });
   }
 
+  if (connection.protocol === "modbus.tcp" && Array.isArray(config.registers)) {
+    return config.registers.flatMap((register) => {
+      if (typeof register !== "object" || register === null) return [];
+      const value = register as Record<string, unknown>;
+      if (typeof value.name !== "string" || !value.name) return [];
+      const details = [value.registerType, value.address, value.dataType]
+        .filter(
+          (item): item is string | number =>
+            typeof item === "string" || typeof item === "number",
+        )
+        .join(" | ");
+      return [{ label: value.name, value: details }];
+    });
+  }
+
   return [];
 }
 
@@ -496,7 +512,9 @@ function ConnectionDetails({
   const heading =
     connection.protocol === "opc.tcp"
       ? "Selected OPC UA nodes"
-      : "S7 data blocks";
+      : connection.protocol === "modbus.tcp"
+        ? "Modbus registers"
+        : "S7 data blocks";
 
   return (
     <div className="fwe-details">
