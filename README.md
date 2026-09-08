@@ -1,70 +1,32 @@
 # FESTO Connector
 
-FESTO Connector is a web application for configuring an industrial data gateway. It runs on a computer in the production network, connects to PLCs, and publishes collected data to an MQTT broker.
+## Description
 
-The browser is only used to configure and monitor connections. The Node.js backend is the component that connects to PLCs, PostgreSQL, and MQTT, so the computer running the backend must have access to all three.
+FESTO Connector is a web application that connects Siemens S7, OPC UA, and Modbus TCP devices to an MQTT broker. Use the dashboard to configure PLC connections, select data to read, and send the collected values through MQTT.
 
-## What it does
+## Run on a New Computer
 
-- Stores connector configuration in PostgreSQL.
-- Connects to Siemens S7 PLCs and reads configured data blocks.
-- Connects to OPC UA servers and subscribes to selected variable NodeIds.
-- Connects to Modbus TCP devices and polls configured coils and registers.
-- Publishes Siemens S7 PLC data to topics such as `festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID>`.
-- Publishes Modbus values to `festo/plc/<PLC_ID>`.
-- Lets users test, save, rescan, import, and export PLC and MQTT configurations from a web dashboard.
+### 1. Install the required software
 
-Siemens S7, OPC UA, and Modbus TCP have active backend connection support. Beckhoff ADS and Rockwell EIP can be configured in the UI, but their backend drivers are not implemented yet.
+Install:
 
-## Architecture
+- Node.js 20 or newer
+- PostgreSQL
+- An MQTT broker, such as Mosquitto
 
-```text
-Browser
-  |
-  | HTTPS / REST API
-  v
-Web server + Node.js backend
-  |             |
-  |             +--> PostgreSQL: saved connector configuration
-  |
-  +--> Siemens S7 PLC, OPC UA server, or Modbus TCP device
-  |
-  +--> MQTT broker: protocol-specific PLC topics
-```
+The computer must be able to reach the PLCs and MQTT broker over the network.
 
-## Deploy on a new computer
+### 2. Copy the project and install packages
 
-The following steps assume a Linux server or industrial PC. The same application commands work on Windows and macOS; only the service and web-server setup differ.
-
-### 1. Prepare the machine
-
-Install the following software:
-
-- Node.js 20 or later
-- PostgreSQL 14 or later
-- Nginx or another web server for production access
-- An MQTT broker reachable from this machine
-
-Before continuing, verify network access from the new machine to:
-
-- PostgreSQL on TCP `5432` (or its configured port)
-- The MQTT broker on its configured port, commonly TCP `1883`
-- Siemens S7 PLCs on TCP `102`
-- OPC UA servers on TCP `4840` or their configured port
-- Modbus TCP devices on TCP `502` or their configured port
-
-### 2. Copy the application and install dependencies
-
-Copy or clone this repository to the target computer, then run:
+Open a terminal in the project folder and run:
 
 ```bash
-cd /opt/FESTO-Connector
-npm ci
+npm install
 ```
 
-### 3. Create the PostgreSQL database
+### 3. Create the database
 
-Create a PostgreSQL database and user, then connect to the new database and create the table:
+Create a PostgreSQL database named `festo_connector`, then run this SQL inside it:
 
 ```sql
 CREATE TABLE IF NOT EXISTS connector_configurations (
@@ -74,130 +36,51 @@ CREATE TABLE IF NOT EXISTS connector_configurations (
 );
 ```
 
-### 4. Configure environment variables
+### 4. Configure the application
 
-Create `/opt/FESTO-Connector/.env`:
+Create `.env` from the example file:
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and enter your PostgreSQL settings:
 
 ```env
 PORT=3001
-DATABASE_URL=postgresql://connector_user:your_password@127.0.0.1:5432/festo_connector
+DATABASE_URL=postgresql://postgres:your_password@127.0.0.1:5432/festo_connector
 ```
 
-Replace the user, password, host, port, and database name with the values for the target environment. Do not commit `.env` to source control.
+Replace `your_password` with your PostgreSQL password. The MQTT address is configured later in the web dashboard.
 
-### 5. Build and start the application
+### 5. Start the application
 
-Build the frontend and start the backend:
+Open two terminals in the project folder.
+
+Terminal 1:
 
 ```bash
-npm run build
 npm run server
 ```
 
-Verify that the backend can reach PostgreSQL:
-
-```bash
-curl http://127.0.0.1:3001/api/health
-```
-
-Expected response:
-
-```json
-{"ok":true,"database":true}
-```
-
-For a production installation, run `npm run server` under a service manager such as `systemd` or PM2 so it restarts automatically after a reboot or failure.
-
-### 6. Serve the frontend with Nginx
-
-Create an Nginx server configuration and update the paths and hostname as needed:
-
-```nginx
-server {
-    listen 80;
-    server_name connector.example.local;
-
-    root /opt/FESTO-Connector/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:3001;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-Reload Nginx, then open `http://connector.example.local` from a browser. Add TLS/HTTPS before exposing the application outside a trusted internal network.
-
-### 7. Configure the connector
-
-1. Open the dashboard in a browser.
-2. Configure and test the MQTT broker.
-3. Add a Siemens S7, OPC UA, or Modbus TCP PLC connection.
-4. Test the connection, configure the data blocks, nodes, or registers, then save it.
-5. Confirm that the dashboard status is `Connected` and that MQTT messages arrive on the expected PLC topic.
-
-For many S7-1200/1500 installations, the initial values are port `102`, rack `0`, and slot `1`. The actual values depend on the PLC model and TIA Portal configuration. The PLC must allow the required external S7 communication.
-
-## Local development
-
-Use two terminals in the project directory:
-
-```bash
-npm run server:dev
-```
+Terminal 2:
 
 ```bash
 npm run dev
 ```
 
-During development, Vite proxies `/api` requests to `http://localhost:3001`.
-
-## MQTT payloads
-
-For Siemens MIP connections, enter the numeric DB in the configuration page, for example `DB1`. The connector reads `scylinderID`, `sValveID`, and `sValveterminalID` from that DB and publishes to:
+Open this address in Chrome:
 
 ```text
-festo-ax/pni/<sValveterminalID>/<sValveID>/<scylinderID>
+http://localhost:5173
 ```
 
-The MQTT JSON message contains the eight `TIME` values from offsets `500` through `528`, plus `udiCycleCounter` from offset `532`. `TIME` values are signed milliseconds as stored by the PLC. OPC UA messages contain the selected NodeId, value, data type, timestamp, and status code.
+Keep both terminals running while using the application.
 
-Modbus messages are published to `festo/plc/<PLC_ID>`. Each message contains the Unit ID, timestamp, a `values` object keyed by the configured register names, and a `registers` array with register type, zero-based address, data type, and decoded value. The supported data types are Boolean, Int16, UInt16, Int32, UInt32, and Float32. Thirty-two-bit values use high-word-first order by default.
+### 6. Configure the connector
 
-Subscribe to all PLC topics with Mosquitto:
-
-```bash
-mosquitto_sub -h localhost -p 1883 -t 'festo-ax/pni/#' -v
-```
-
-## API overview
-
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/health` | Check PostgreSQL connectivity. |
-| `GET` | `/api/configuration` | Load the most recently saved connector configuration. |
-| `PUT` | `/api/configuration` | Save connector configuration. |
-| `POST` | `/api/mqtt/connect` | Test MQTT broker connectivity. |
-| `POST` | `/api/plcs/siemens/connect` | Connect to a Siemens PLC and start polling. |
-| `POST` | `/api/plcs/opcua/test` | Test an OPC UA connection. |
-| `POST` | `/api/plcs/opcua/browse` | Browse OPC UA nodes. |
-| `POST` | `/api/plcs/opcua/connect` | Start an OPC UA subscription. |
-| `POST` | `/api/plcs/modbus/test` | Connect and read the first configured Modbus register. |
-| `POST` | `/api/plcs/modbus/connect` | Connect and start Modbus polling and MQTT publishing. |
-| `GET` | `/api/plcs/modbus/:id/status` | Read the Modbus polling and MQTT status. |
-| `DELETE` | `/api/plcs/modbus/:id` | Stop a Modbus poller and close its connection. |
-
-## Current limitations
-
-- PLC pollers are kept in memory and are not restored automatically after a backend restart.
-- Beckhoff ADS and Rockwell EIP backend drivers are not implemented.
-- OPC UA currently supports anonymous connections with no security mode or security policy.
-- Siemens MIP mode expects the fixed `FB_MIP_DB` field layout configured in the application.
-- The Siemens backend uses Snap7 `ConnectTo(host, rack, slot)`; the port field is saved for configuration but is not passed to Snap7.
-- Protect the API and database because saved configuration can contain MQTT credentials.
+1. Configure and save the MQTT connection.
+2. Add a Siemens S7, OPC UA, or Modbus TCP device.
+3. Click **Test connection**.
+4. Configure the data to read and click **Save**.
+5. Check the dashboard status and subscribe to the MQTT topic to verify the output.
