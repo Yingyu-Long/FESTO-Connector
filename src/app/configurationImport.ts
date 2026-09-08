@@ -109,7 +109,9 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
   }
 
   const configurationKey =
-    protocol === "opc.tcp" ? "configuration" : `${protocol}Configuration`;
+    protocol === "opc.tcp" || protocol === "modbus.tcp"
+      ? "configuration"
+      : `${protocol}Configuration`;
   return {
     recordId: uniqueKey,
     id: source.id,

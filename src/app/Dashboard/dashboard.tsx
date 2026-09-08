@@ -214,6 +214,19 @@ async function reconnect(connection: SavedConnection): Promise<RescanResult> {
       mqtt: readMqttConfig(),
       mqttTopic: `festo/plc/${connection.id}`,
     };
+  } else if (connection.protocol === "modbus.tcp") {
+    endpoint = "/api/plcs/modbus/connect";
+    body = {
+      id: connection.id,
+      host: connection.host,
+      port: Number(connection.port),
+      unitId: Number(config.unitId ?? 1),
+      timeout: Number(config.timeout ?? 3000),
+      polling: Number(config.polling ?? 500),
+      registers: Array.isArray(config.registers) ? config.registers : [],
+      mqtt: readMqttConfig(),
+      mqttTopic: `festo/plc/${connection.id}`,
+    };
   } else {
     return { connection, status: "disconnected", supported: false };
   }
@@ -518,9 +531,10 @@ function ConnectionDetails({
 
   return (
     <div className="fwe-details">
-      {hasDisplayableDetails(connection) && (
+      {connection.protocol !== "modbus.tcp" &&
+        hasDisplayableDetails(connection) && (
         <p className="fwe-details-message">{connection.details}</p>
-      )}
+        )}
       {items.length > 0 && (
         <section className="fwe-detail-items" aria-label={heading}>
           <h3>{heading}</h3>
@@ -669,6 +683,15 @@ export default function Dashboard() {
         setExpandedIndex(null);
         notify("Connection deleted");
         return;
+      }
+      if (connection.protocol === "modbus.tcp") {
+        const stopResponse = await fetch(
+          `/api/plcs/modbus/${encodeURIComponent(connection.id)}`,
+          { method: "DELETE" },
+        );
+        if (!stopResponse.ok) {
+          throw new Error("Unable to stop Modbus polling");
+        }
       }
       const saved = JSON.parse(
         localStorage.getItem("festo-connections") ?? "[]",

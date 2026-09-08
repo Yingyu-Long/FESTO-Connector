@@ -4,6 +4,15 @@ import "dotenv/config";
 import { query } from "./database.js";
 import { testMqttConnection } from "./mqttPublisher.js";
 import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
+import {
+  ModbusConfigurationError,
+  testModbusConnection,
+} from "./plc/modbusClient.js";
+import {
+  getModbusPollerStatus,
+  startModbusPoller,
+  stopModbusPoller,
+} from "./plc/modbusPoller.js";
 import { startOpcuaPoller, stopOpcuaPoller } from "./plc/opcuaPoller.js";
 import {
   getSiemensPollerStatus,
@@ -189,6 +198,51 @@ app.get("/api/plcs/siemens/:id/status", (request, response) => {
 
 app.delete("/api/plcs/siemens/:id", (request, response) => {
   stopSiemensPoller(request.params.id);
+  response.status(204).end();
+});
+
+function modbusError(response, error) {
+  const invalidConfiguration = error instanceof ModbusConfigurationError;
+  response.status(invalidConfiguration ? 400 : 502).json({
+    connected: false,
+    error:
+      error instanceof Error
+        ? error.message
+        : "Unable to connect to Modbus TCP device",
+  });
+}
+
+app.post("/api/plcs/modbus/test", async (request, response) => {
+  try {
+    const sample = await testModbusConnection(request.body);
+    response.json({ connected: true, sample });
+  } catch (error) {
+    modbusError(response, error);
+  }
+});
+
+app.post("/api/plcs/modbus/connect", async (request, response) => {
+  try {
+    if (
+      request.body?.previousId &&
+      String(request.body.previousId) !== String(request.body.id)
+    ) {
+      await stopModbusPoller(request.body.previousId);
+    }
+    const result = await startModbusPoller(request.body);
+    response.json({ connected: true, plcId: request.body.id, ...result });
+  } catch (error) {
+    console.error(`Modbus PLC ${request.body?.id} connection failed`, error);
+    modbusError(response, error);
+  }
+});
+
+app.get("/api/plcs/modbus/:id/status", (request, response) => {
+  response.json(getModbusPollerStatus(request.params.id));
+});
+
+app.delete("/api/plcs/modbus/:id", async (request, response) => {
+  await stopModbusPoller(request.params.id);
   response.status(204).end();
 });
 

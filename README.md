@@ -9,10 +9,12 @@ The browser is only used to configure and monitor connections. The Node.js backe
 - Stores connector configuration in PostgreSQL.
 - Connects to Siemens S7 PLCs and reads configured data blocks.
 - Connects to OPC UA servers and subscribes to selected variable NodeIds.
+- Connects to Modbus TCP devices and polls configured coils and registers.
 - Publishes Siemens S7 PLC data to topics such as `festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID>`.
+- Publishes Modbus values to `festo/plc/<PLC_ID>`.
 - Lets users test, save, rescan, import, and export PLC and MQTT configurations from a web dashboard.
 
-Siemens S7 and OPC UA have active backend connection support. Beckhoff ADS and Rockwell EIP can be configured in the UI, but their backend drivers are not implemented yet.
+Siemens S7, OPC UA, and Modbus TCP have active backend connection support. Beckhoff ADS and Rockwell EIP can be configured in the UI, but their backend drivers are not implemented yet.
 
 ## Architecture
 
@@ -25,9 +27,9 @@ Web server + Node.js backend
   |             |
   |             +--> PostgreSQL: saved connector configuration
   |
-  +--> Siemens S7 PLC or OPC UA server
+  +--> Siemens S7 PLC, OPC UA server, or Modbus TCP device
   |
-  +--> MQTT broker: festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID> (Siemens S7)
+  +--> MQTT broker: protocol-specific PLC topics
 ```
 
 ## Deploy on a new computer
@@ -49,6 +51,7 @@ Before continuing, verify network access from the new machine to:
 - The MQTT broker on its configured port, commonly TCP `1883`
 - Siemens S7 PLCs on TCP `102`
 - OPC UA servers on TCP `4840` or their configured port
+- Modbus TCP devices on TCP `502` or their configured port
 
 ### 2. Copy the application and install dependencies
 
@@ -135,9 +138,9 @@ Reload Nginx, then open `http://connector.example.local` from a browser. Add TLS
 
 1. Open the dashboard in a browser.
 2. Configure and test the MQTT broker.
-3. Add a Siemens S7 or OPC UA PLC connection.
-4. Test the connection, select S7 data blocks or OPC UA nodes, then save it.
-5. Confirm that the dashboard status is `Connected` and that Siemens S7 MQTT messages arrive on `festo-ax/pni/<VALVE_TERMINAL_ID>/<VALVE_ID>/<CYLINDER_ID>`.
+3. Add a Siemens S7, OPC UA, or Modbus TCP PLC connection.
+4. Test the connection, configure the data blocks, nodes, or registers, then save it.
+5. Confirm that the dashboard status is `Connected` and that MQTT messages arrive on the expected PLC topic.
 
 For many S7-1200/1500 installations, the initial values are port `102`, rack `0`, and slot `1`. The actual values depend on the PLC model and TIA Portal configuration. The PLC must allow the required external S7 communication.
 
@@ -165,6 +168,8 @@ festo-ax/pni/<sValveterminalID>/<sValveID>/<scylinderID>
 
 The MQTT JSON message contains the eight `TIME` values from offsets `500` through `528`, plus `udiCycleCounter` from offset `532`. `TIME` values are signed milliseconds as stored by the PLC. OPC UA messages contain the selected NodeId, value, data type, timestamp, and status code.
 
+Modbus messages are published to `festo/plc/<PLC_ID>`. Each message contains the Unit ID, timestamp, a `values` object keyed by the configured register names, and a `registers` array with register type, zero-based address, data type, and decoded value. The supported data types are Boolean, Int16, UInt16, Int32, UInt32, and Float32. Thirty-two-bit values use high-word-first order by default.
+
 Subscribe to all PLC topics with Mosquitto:
 
 ```bash
@@ -183,6 +188,10 @@ mosquitto_sub -h localhost -p 1883 -t 'festo-ax/pni/#' -v
 | `POST` | `/api/plcs/opcua/test` | Test an OPC UA connection. |
 | `POST` | `/api/plcs/opcua/browse` | Browse OPC UA nodes. |
 | `POST` | `/api/plcs/opcua/connect` | Start an OPC UA subscription. |
+| `POST` | `/api/plcs/modbus/test` | Connect and read the first configured Modbus register. |
+| `POST` | `/api/plcs/modbus/connect` | Connect and start Modbus polling and MQTT publishing. |
+| `GET` | `/api/plcs/modbus/:id/status` | Read the Modbus polling and MQTT status. |
+| `DELETE` | `/api/plcs/modbus/:id` | Stop a Modbus poller and close its connection. |
 
 ## Current limitations
 
