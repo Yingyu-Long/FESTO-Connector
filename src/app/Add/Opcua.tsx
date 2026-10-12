@@ -7,9 +7,9 @@ import {
 } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { configString, saveConnection } from "./storage";
-import type { SavedConnection } from "./storage";
-import { saveCurrentConfiguration } from "../configurationApi";
+import { configString, readMqttConfig, saveConnection } from "../storage";
+import type { SavedConnection } from "../storage";
+import { connectPlc, saveCurrentConfiguration } from "../configurationApi";
 
 type BrowsedNode = {
   nodeId: string;
@@ -162,20 +162,9 @@ export default function Opcua() {
   const subscriptionValid =
     valid && selectedNodeIds.length > 0 && Boolean(polling);
   const buildBackendConfig = () => {
-    let mqtt: Record<string, unknown> | undefined;
-    try {
-      const savedMqtt = JSON.parse(
-        localStorage.getItem("festo-mqtt-config") ?? "null",
-      ) as Record<string, unknown> | null;
-      if (savedMqtt && typeof savedMqtt.host === "string" && savedMqtt.host) {
-        mqtt = savedMqtt;
-      }
-    } catch {
-      mqtt = undefined;
-    }
-
     return {
       id: values.id,
+      previousId: editConnection?.id,
       host: values.host,
       port: Number(values.port),
       server: values.server,
@@ -184,7 +173,7 @@ export default function Opcua() {
       authType,
       polling: Number(polling),
       nodeIds: selectedNodeIds,
-      mqtt,
+      mqtt: readMqttConfig(),
       mqttTopic: `festo/plc/${values.id}`,
     };
   };
@@ -263,24 +252,19 @@ export default function Opcua() {
     });
   };
   const connectToBackend = async () => {
-    const response = await fetch("/api/plcs/opcua/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildBackendConfig()),
-    });
-    const result = (await response.json()) as {
-      connected?: boolean;
-      error?: string;
-    };
-    if (!response.ok || !result.connected) {
-      throw new Error(result.error ?? "Unable to start OPC UA subscription");
-    }
-    return "connected" as const;
+    const result = await connectPlc(
+      "/api/plcs/opcua/connect",
+      buildBackendConfig(),
+      "Unable to start OPC UA subscription",
+    );
+    setConnectionStatus(result.status);
+    setConnectionError(result.connectionError ?? "");
+    return result;
   };
   const save = async () => {
     setSubmitted(true);
     if (!subscriptionValid) return;
-    const status = await connectToBackend();
+    const result = await connectToBackend();
     saveConnection({
       recordId: editConnection?.recordId,
       id: values.id,
@@ -288,8 +272,7 @@ export default function Opcua() {
       host: values.host,
       port: values.port,
       details: `server: ${values.server || "default"}, security: ${securityMode}/${securityPolicy}, authentication: ${authType}`,
-      status,
-      editPath: "/add/opcua",
+      ...result,
       config: {
         ...values,
         ...certificates,
@@ -566,7 +549,7 @@ export default function Opcua() {
         <FormActions
           valid={subscriptionValid}
           onSave={save}
-          onCancel={() => navigate("/add")}
+          onCancel={() => navigate(editConnection ? "/dashboard" : "/add")}
         />
       </div>
     </PlcShell>

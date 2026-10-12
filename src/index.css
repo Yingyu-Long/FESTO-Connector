@@ -1,32 +1,39 @@
-@font-face {
-  font-family: Festo;
-  src:
-    url("https://www.festo.com/fonts/festo-regular.woff2") format("woff2"),
-    url("https://www.festo.com/fonts/festo-regular.woff") format("woff");
-}
-@font-face {
-  font-family: Festo;
-  src:
-    url("https://www.festo.com/fonts/festo-bold.woff2") format("woff2"),
-    url("https://www.festo.com/fonts/festo-bold.woff") format("woff");
-  font-weight: 700;
-}
-
 :root {
   --fwe-white: #fff;
-  --fwe-text: #333;
-  --fwe-text-light: #82868b;
-  --fwe-caerul: #0091dc;
-  --fwe-hero: #0091dc;
-  --fwe-background: #f0f2f3;
-  --fwe-gray-200: #e2e5e8;
-  --fwe-gray-300: #d3d8dd;
-  --fwe-gray-400: #b6bec6;
-  --fwe-red: #d50000;
-  --fwe-text-disabled: #b9babb;
-  --fwe-border: #d3d8dd;
-  --fwe-font-family-sans-serif: "Festo", "Trebuchet MS", Arial, sans-serif;
+  --fwe-text: #182b40;
+  --fwe-text-light: #586b7e;
+  --fwe-caerul: #0076bd;
+  --fwe-hero: #0076bd;
+  --fwe-hero-hover: #006aa9;
+  --fwe-hero-gray: #61788a;
+  --fwe-background: #f3f6f9;
+  --fwe-gray-50: #f6f9fb;
+  --fwe-gray-100: #f1f5f8;
+  --fwe-gray-200: #e9f2f8;
+  --fwe-gray-300: #dbe3eb;
+  --fwe-gray-400: #9aa7b3;
+  --fwe-red: #b82b39;
+  --fwe-red-bg: #fff0f1;
+  --fwe-green: #168053;
+  --fwe-text-disabled: #9ca9b5;
+  --fwe-border: #dbe3eb;
+  --fwe-control-border: #ccd7e1;
+  --fwe-control-disabled: #eef2f6;
+  --fwe-font-family-sans-serif: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --fwe-font-size: 14px;
+  --fwe-title-size: 30px;
+  --fwe-heading-size: 17px;
+  --fwe-icon-size: 16px;
+  --fwe-section-icon-size: 19px;
+  --fwe-panel-radius: 10px;
+  --fwe-control-radius: 8px;
+  --fwe-control-height: 44px;
+  --fwe-button-height: 42px;
+  --fwe-content-width: 1200px;
+  --fwe-header-height: 80px;
   font-family: var(--fwe-font-family-sans-serif);
+  font-size: var(--fwe-font-size);
+  line-height: 1.5;
   color: var(--fwe-text);
   background: var(--fwe-background);
   font-synthesis: none;
@@ -41,6 +48,26 @@ body {
   min-width: 320px;
 }
 button,
-a {
+a,
+input,
+select,
+textarea {
   font: inherit;
+}
+button,
+input,
+select,
+textarea {
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+  }
 }

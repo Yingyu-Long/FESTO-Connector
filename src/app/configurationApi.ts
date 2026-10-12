@@ -1,8 +1,37 @@
 import { buildConfiguration } from "./configuration";
-import { deduplicateConnections } from "./Add/storage";
-import type { SavedConnection } from "./Add/storage";
+import { readSavedConnections } from "./storage";
+import type { SavedConnection } from "./storage";
 
-export async function saveConfiguration(configuration: unknown) {
+export async function connectPlc(
+  endpoint: string,
+  configuration: unknown,
+  failureMessage: string,
+): Promise<Pick<SavedConnection, "status" | "connectionError">> {
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(configuration),
+    });
+    const result = (await response.json().catch(() => null)) as {
+      connected?: boolean;
+      error?: string;
+    } | null;
+    return response.ok && result?.connected
+      ? { status: "connected", connectionError: undefined }
+      : {
+          status: "disconnected",
+          connectionError: result?.error || failureMessage,
+        };
+  } catch {
+    return {
+      status: "disconnected",
+      connectionError: "Unable to reach the PLC backend",
+    };
+  }
+}
+
+async function saveConfiguration(configuration: unknown) {
   const response = await fetch("/api/configuration", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -50,18 +79,5 @@ export async function deleteConfigurationSource(uniqueKey: string) {
 }
 
 export async function saveCurrentConfiguration() {
-  const connections: SavedConnection[] = (() => {
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem("festo-connections") ?? "[]",
-      );
-      return Array.isArray(saved)
-        ? deduplicateConnections(saved as SavedConnection[])
-        : [];
-    } catch {
-      return [];
-    }
-  })();
-
-  return saveConfiguration(buildConfiguration(connections));
+  return saveConfiguration(buildConfiguration(readSavedConnections()));
 }

@@ -10,7 +10,7 @@ function endpointUrl(config) {
   return `opc.tcp://${config.host}:${Number(config.port ?? 4840)}${serverPath ? `/${serverPath}` : ""}`;
 }
 
-export function assertAnonymousNoSecurity(config) {
+function assertAnonymousNoSecurity(config) {
   const securityMode = config.securityMode ?? "NONE_MODE";
   const authType = config.authType ?? "None";
 

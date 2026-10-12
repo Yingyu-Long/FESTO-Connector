@@ -1,15 +1,5 @@
-import type { SavedConnection } from "./Add/storage";
-
-function readJsonStorage(key: string) {
-  try {
-    return JSON.parse(localStorage.getItem(key) ?? "null") as Record<
-      string,
-      unknown
-    > | null;
-  } catch {
-    return null;
-  }
-}
+import { connectionKey, readMqttConfig } from "./storage";
+import type { SavedConnection } from "./storage";
 
 function getConfigurationId() {
   const stored = localStorage.getItem("festo-configuration-id");
@@ -98,11 +88,14 @@ function getMessageSourceConfiguration(connection: SavedConnection) {
 }
 
 export function buildConfiguration(connections: SavedConnection[]) {
-  const mqtt = readJsonStorage("festo-mqtt-config") ?? {};
+  const mqtt = readMqttConfig() ?? {};
   const messageSources = connections.map((connection) => ({
     id: connection.id,
     uri: getConnectionUri(connection),
-    uniqueKey: connection.recordId ?? `${connection.protocol}-${connection.id}`,
+    uniqueKey: connectionKey(connection),
+    details: connection.details,
+    status: connection.status,
+    connectionError: connection.connectionError,
     ...getMessageSourceConfiguration(connection),
   }));
   const mqttProtocol =

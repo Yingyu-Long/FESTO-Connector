@@ -6,12 +6,13 @@ import { testMqttConnection } from "./mqttPublisher.js";
 import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
 import {
   ModbusConfigurationError,
-  testModbusConnection,
+  modbusErrorMessage,
 } from "./plc/modbusClient.js";
 import {
   getModbusPollerStatus,
   startModbusPoller,
   stopModbusPoller,
+  testModbusPollerConnection,
 } from "./plc/modbusPoller.js";
 import { startOpcuaPoller, stopOpcuaPoller } from "./plc/opcuaPoller.js";
 import {
@@ -177,6 +178,9 @@ app.post("/api/plcs/siemens/connect", async (request, response) => {
   }
 
   try {
+    if (config.previousId && String(config.previousId) !== String(config.id)) {
+      stopSiemensPoller(config.previousId);
+    }
     await startSiemensPoller(config);
     response.json({ connected: true, plcId: config.id });
   } catch (error) {
@@ -205,16 +209,13 @@ function modbusError(response, error) {
   const invalidConfiguration = error instanceof ModbusConfigurationError;
   response.status(invalidConfiguration ? 400 : 502).json({
     connected: false,
-    error:
-      error instanceof Error
-        ? error.message
-        : "Unable to connect to Modbus TCP device",
+    error: modbusErrorMessage(error),
   });
 }
 
 app.post("/api/plcs/modbus/test", async (request, response) => {
   try {
-    const sample = await testModbusConnection(request.body);
+    const sample = await testModbusPollerConnection(request.body);
     response.json({ connected: true, sample });
   } catch (error) {
     modbusError(response, error);
@@ -308,6 +309,9 @@ app.post("/api/plcs/opcua/connect", async (request, response) => {
   }
 
   try {
+    if (config.previousId && String(config.previousId) !== String(config.id)) {
+      await stopOpcuaPoller(config.previousId);
+    }
     await startOpcuaPoller(config);
     response.json({ connected: true, plcId: config.id });
   } catch (error) {

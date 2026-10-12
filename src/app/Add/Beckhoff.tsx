@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { LoadingIndicator } from "@festo-ui/react";
 import { IconConnected, IconFailure } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { configString, saveConnection } from "./storage";
-import type { SavedConnection } from "./storage";
+import { configString, saveConnection } from "../storage";
+import type { SavedConnection } from "../storage";
 import { saveCurrentConfiguration } from "../configurationApi";
 
 export default function Beckhoff() {
@@ -28,8 +27,6 @@ export default function Beckhoff() {
   );
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
-  const [connectionFailed, setConnectionFailed] = useState(false);
-  const [testing, setTesting] = useState(false);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   const valid = Boolean(
@@ -42,14 +39,6 @@ export default function Beckhoff() {
     values.sourcePort &&
     values.polling,
   );
-  const testConnection = async () => {
-    setTested(true);
-    if (!valid) return;
-    setTesting(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    setConnectionFailed(true);
-    setTesting(false);
-  };
   const save = async () => {
     setSubmitted(true);
     if (!valid) return;
@@ -61,7 +50,7 @@ export default function Beckhoff() {
       port: values.port,
       details: `target-net-id: ${values.targetNetId}, target-port: ${values.targetPort}, source-net-id: ${values.sourceNetId}, source-port: ${values.sourcePort}, mode: ${mode}, polling: ${values.polling} ms`,
       status: "disconnected",
-      editPath: "/add/beckhoff",
+      connectionError: "Beckhoff ADS connections are not supported yet",
       config: { ...values, mode },
     });
     await saveCurrentConfiguration();
@@ -133,25 +122,21 @@ export default function Beckhoff() {
                 type="button"
                 className="fwe-btn no-wrap"
                 aria-label="Test connection"
-                onClick={() => void testConnection()}
-                disabled={testing}
+                onClick={() => setTested(true)}
               >
                 <IconConnected />
                 Test connection
               </button>
-              {testing && (
-                <LoadingIndicator size="small">Loading ...</LoadingIndicator>
-              )}
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />
                   Please fill out all required fields correctly.
                 </div>
               )}
-              {connectionFailed && (
+              {tested && valid && (
                 <span className="fwe-status">
                   <IconFailure aria-hidden="true" />
-                  Connection failed
+                  Beckhoff ADS connections are not supported yet
                 </span>
               )}
             </div>
@@ -181,7 +166,7 @@ export default function Beckhoff() {
         <FormActions
           valid={valid}
           onSave={save}
-          onCancel={() => navigate("/add")}
+          onCancel={() => navigate(editConnection ? "/dashboard" : "/add")}
         />
       </div>
     </PlcShell>

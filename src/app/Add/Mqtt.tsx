@@ -7,6 +7,7 @@ import {
 } from "@festo-ui/react-icons";
 import { useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
+import { readJsonStorage } from "../storage";
 import { saveCurrentConfiguration } from "../configurationApi";
 
 type MqttConfig = {
@@ -29,42 +30,19 @@ const defaultMqttConfig: MqttConfig = {
   authType: "None",
 };
 
-function readMqttConfig(): MqttConfig {
-  try {
-    const saved = JSON.parse(
-      localStorage.getItem("festo-mqtt-config") ?? "null",
-    ) as Partial<MqttConfig> | null;
-    return {
-      host:
-        typeof saved?.host === "string" ? saved.host : defaultMqttConfig.host,
-      port:
-        typeof saved?.port === "string" ? saved.port : defaultMqttConfig.port,
-      clientId:
-        typeof saved?.clientId === "string"
-          ? saved.clientId
-          : defaultMqttConfig.clientId,
-      username:
-        typeof saved?.username === "string"
-          ? saved.username
-          : defaultMqttConfig.username,
-      password:
-        typeof saved?.password === "string"
-          ? saved.password
-          : defaultMqttConfig.password,
-      qos: typeof saved?.qos === "string" ? saved.qos : defaultMqttConfig.qos,
-      authType:
-        typeof saved?.authType === "string"
-          ? saved.authType
-          : defaultMqttConfig.authType,
-    };
-  } catch {
-    return defaultMqttConfig;
+function readMqttForm(): MqttConfig {
+  const saved = readJsonStorage("festo-mqtt-config") as Partial<MqttConfig> | null;
+  const config = { ...defaultMqttConfig };
+  for (const key of Object.keys(config) as (keyof MqttConfig)[]) {
+    const value = saved?.[key];
+    if (typeof value === "string") config[key] = value;
   }
+  return config;
 }
 
 export default function Mqtt() {
   const navigate = useNavigate();
-  const savedConfig = readMqttConfig();
+  const [savedConfig] = useState(readMqttForm);
   const [values, setValues] = useState({
     host: savedConfig.host,
     port: savedConfig.port,

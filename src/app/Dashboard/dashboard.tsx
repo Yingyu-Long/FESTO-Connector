@@ -1,62 +1,28 @@
 import { Fragment, useEffect, useState } from "react";
 import { LoadingIndicator } from "@festo-ui/react";
 import {
-  IconAdd,
-  IconCheckStatus,
-  IconDelete,
-  IconEdit,
-  IconExport,
-  IconFailure,
-  IconMore,
-  IconMenu,
-  IconReinitialize,
-  IconRefresh,
-  IconUpdate,
+  IconAdd, IconCheckStatus, IconDelete, IconEdit, IconExport,
+  IconFailure, IconMore, IconReinitialize, IconRefresh, IconUpdate,
 } from "@festo-ui/react-icons";
-import dashboardIcon from "../../assets/dashboards-icon.png";
-import { useNavigate } from "react-router-dom";
-import { deduplicateConnections } from "../Add/storage";
-import type { SavedConnection } from "../Add/storage";
+import { useLocation, useNavigate } from "react-router-dom";
+import { AppFooter, AppHeader } from "../AppLayout";
+import { connectionKey, readSavedConnections, storeConnections } from "../storage";
+import type { SavedConnection } from "../storage";
 import ImportPage from "../Import";
-import { buildConfiguration } from "../configuration";
+import { deleteConfigurationSource, loadConfiguration } from "../configurationApi";
+import { storeConfiguration } from "../configurationImport";
 import {
-  deleteConfigurationSource,
-  loadConfiguration,
-} from "../configurationApi";
-import { prepareConfiguration } from "../configurationImport";
+  downloadConfiguration, prepareDatabaseConfiguration,
+  readMqttSummary, reconnect, storeRescanResults,
+} from "./connections";
+import ConnectionDetails from "./ConnectionDetails";
+import type { S7PollingStatus } from "./ConnectionDetails";
+import {
+  connectionDisplayError, connectionDisplayStatus,
+  loadModbusConnectionStatus, modbusStatusKey,
+} from "./modbusStatus";
+import type { ModbusConnectionStatus } from "./modbusStatus";
 
-type Page = "Status" | "Import" | "Downloads";
-type Asset = "MIP" | "ENI" | "MIE";
-type MqttSummary = {
-  protocol: string;
-  host: string;
-  port: string;
-  status: "connected" | "disconnected";
-};
-
-type DetailItem = {
-  label: string;
-  value: string;
-};
-
-type S7DataBlockStatus = {
-  dataBlock: number | string;
-  cylinderId?: string;
-  valveId?: string;
-  valveTerminalId?: string;
-};
-
-type S7PollingStatus = {
-  pollingStatus: string;
-  dataBlocks: S7DataBlockStatus[];
-  error?: string;
-};
-
-type RescanResult = {
-  connection: SavedConnection;
-  status: SavedConnection["status"];
-  supported: boolean;
-};
 const editPaths: Record<string, string> = {
   s7: "/add/siemens",
   eip: "/add/rockwell",
@@ -64,250 +30,22 @@ const editPaths: Record<string, string> = {
   "opc.tcp": "/add/opcua",
   "modbus.tcp": "/add/modbus",
 };
-const downloadsUrl =
-  "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
-
-const defaultConnection: SavedConnection = {
-  id: "PLC id",
-  protocol: "s7",
-  host: "hostname",
-  port: "port",
-  details: "remote-rack: 0, remote-slot: 1",
-  status: "disconnected",
-};
-
-function readMqttSummary(): MqttSummary | null {
-  try {
-    const saved = JSON.parse(
-      localStorage.getItem("festo-mqtt-config") ?? "null",
-    ) as Partial<MqttSummary> | null;
-    if (
-      !saved ||
-      typeof saved.host !== "string" ||
-      typeof saved.port !== "string"
-    ) {
-      return null;
-    }
-    const protocol = saved.protocol === "tcp:" ? "tcp://" : saved.protocol;
-    return {
-      protocol: typeof protocol === "string" ? protocol : "tcp://",
-      host: saved.host,
-      port: saved.port,
-      status: saved.status === "connected" ? "connected" : "disconnected",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function prepareDatabaseConfiguration(configuration: unknown) {
-  const prepared = prepareConfiguration(configuration);
-  const previous = readMqttSummary();
-  const previousConnections = readConnections();
-  const sameMqttConnection =
-    previous &&
-    previous.host === prepared.mqttConfig.host &&
-    previous.port === prepared.mqttConfig.port;
-
-  if (sameMqttConnection) {
-    prepared.mqttConfig.status = previous.status;
-  }
-
-  prepared.connections = prepared.connections.map((connection) => {
-    const previousConnection = previousConnections.find(
-      (saved) =>
-        saved.protocol === connection.protocol &&
-        saved.id === connection.id &&
-        saved.host === connection.host &&
-        saved.port === connection.port,
-    );
-
-    return previousConnection?.status === "connected"
-      ? { ...connection, status: "connected" }
-      : connection;
-  });
-
-  return prepared;
-}
-
-function readConnections() {
-  try {
-    const saved = JSON.parse(
-      localStorage.getItem("festo-connections") ?? "[]",
-    ) as SavedConnection[];
-    const defaultRows =
-      localStorage.getItem("festo-default-connection-hidden") === "true"
-        ? []
-        : [defaultConnection];
-    return [
-      ...defaultRows,
-      ...(Array.isArray(saved) ? deduplicateConnections(saved) : []),
-    ];
-  } catch {
-    return [defaultConnection];
-  }
-}
-
-function connectionKey(connection: SavedConnection) {
-  return connection.recordId ?? `${connection.protocol}-${connection.id}`;
-}
-
-function readMqttConfig() {
-  try {
-    const config = JSON.parse(
-      localStorage.getItem("festo-mqtt-config") ?? "null",
-    ) as Record<string, unknown> | null;
-    return config && typeof config.host === "string" && config.host
-      ? config
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function reconnect(connection: SavedConnection): Promise<RescanResult> {
-  const config = connection.config ?? {};
-  let endpoint: string;
-  let body: Record<string, unknown>;
-
-  if (connection.protocol === "s7") {
-    const dataBlocks = Array.isArray(config.dataBlocks)
-      ? config.dataBlocks.flatMap((block) => {
-          if (typeof block !== "object" || block === null) return [];
-          const value = block as Record<string, unknown>;
-          const range = value.dataBlock ?? value.range;
-          if (typeof range !== "string" || !range) return [];
-          return [
-            {
-              range,
-              polling: Number(value.polling ?? config.polling ?? 500),
-              ...(value.size ? { size: Number(value.size) } : {}),
-            },
-          ];
-        })
-      : [];
-    endpoint = "/api/plcs/siemens/connect";
-    body = {
-      id: connection.id,
-      host: connection.host,
-      port: Number(connection.port),
-      rack: Number(config.rack ?? 0),
-      slot: Number(config.slot ?? 1),
-      polling: Number(dataBlocks[0]?.polling ?? config.polling ?? 500),
-      dataBlocks,
-      messageLayout: String(config.messageLayout ?? "mip"),
-      mqtt: readMqttConfig(),
-      mqttTopic: `festo-ax/pni/${connection.id}`,
-    };
-  } else if (connection.protocol === "opc.tcp") {
-    endpoint = "/api/plcs/opcua/connect";
-    body = {
-      id: connection.id,
-      host: connection.host,
-      port: Number(connection.port),
-      server: String(config.server ?? ""),
-      securityMode: String(config.securityMode ?? "NONE_MODE"),
-      securityPolicy: String(config.securityPolicy ?? "NONE"),
-      authType: String(config.authType ?? "None"),
-      polling: Number(config.polling ?? 500),
-      nodeIds: Array.isArray(config.nodeIds) ? config.nodeIds : [],
-      mqtt: readMqttConfig(),
-      mqttTopic: `festo/plc/${connection.id}`,
-    };
-  } else if (connection.protocol === "modbus.tcp") {
-    endpoint = "/api/plcs/modbus/connect";
-    body = {
-      id: connection.id,
-      host: connection.host,
-      port: Number(connection.port),
-      unitId: Number(config.unitId ?? 1),
-      timeout: Number(config.timeout ?? 3000),
-      polling: Number(config.polling ?? 500),
-      registers: Array.isArray(config.registers) ? config.registers : [],
-      mqtt: readMqttConfig(),
-      mqttTopic: `festo/plc/${connection.id}`,
-    };
-  } else {
-    return { connection, status: "disconnected", supported: false };
-  }
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const result = (await response.json().catch(() => null)) as {
-      connected?: boolean;
-    } | null;
-    return {
-      connection,
-      status: response.ok && result?.connected ? "connected" : "disconnected",
-      supported: true,
-    };
-  } catch {
-    return { connection, status: "disconnected", supported: true };
-  }
-}
-
-function storeRescanResults(results: RescanResult[]) {
-  const statuses = new Map(
-    results.map((result) => [connectionKey(result.connection), result.status]),
-  );
-  try {
-    const saved = JSON.parse(
-      localStorage.getItem("festo-connections") ?? "[]",
-    ) as SavedConnection[];
-    if (!Array.isArray(saved)) return;
-    localStorage.setItem(
-      "festo-connections",
-      JSON.stringify(
-        saved.map((connection) => ({
-          ...connection,
-          status: statuses.get(connectionKey(connection)) ?? connection.status,
-        })),
-      ),
-    );
-  } catch {
-    // Keep the current dashboard state when the local configuration is invalid.
-  }
-}
-
-function downloadConfiguration(connections: SavedConnection[]) {
-  const blob = new Blob(
-    [
-      JSON.stringify(
-        buildConfiguration(
-          connections.filter((connection) => connection !== defaultConnection),
-        ),
-        null,
-        4,
-      ),
-    ],
-    { type: "application/json" },
-  );
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "configuration-pni-connector.json";
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 function Action({
   icon,
   label,
   onClick,
   loading = false,
+  primary = false,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   loading?: boolean;
+  primary?: boolean;
 }) {
   return (
     <button
-      className="fwe-action"
+      className={`fwe-action${primary ? " is-primary" : ""}`}
       type="button"
       onClick={onClick}
       disabled={loading}
@@ -324,7 +62,16 @@ function Action({
   );
 }
 
-function ConnectionStatus({ status }: { status: SavedConnection["status"] }) {
+function ConnectionStatus({
+  status,
+  error,
+}: {
+  status: SavedConnection["status"] | "checking" | "unavailable";
+  error?: string;
+}) {
+  if (status === "checking") {
+    return <span className="fwe-status">Checking...</span>;
+  }
   if (status === "connected") {
     return (
       <span className="fwe-status fwe-status-connected">
@@ -335,248 +82,72 @@ function ConnectionStatus({ status }: { status: SavedConnection["status"] }) {
   }
 
   return (
-    <span className="fwe-status">
+    <span className="fwe-status" title={error}>
       <IconFailure aria-hidden="true" />
-      Disconnected
+      {status === "unavailable" ? "Status unavailable" : "Disconnected"}
     </span>
-  );
-}
-
-function connectionDetailItems(connection: SavedConnection): DetailItem[] {
-  const config = connection.config ?? {};
-
-  if (connection.protocol === "opc.tcp") {
-    const selectedNodes = Array.isArray(config.selectedNodes)
-      ? config.selectedNodes
-      : [];
-    const namedNodes = selectedNodes.flatMap((node) => {
-      if (typeof node !== "object" || node === null) return [];
-      const value = node as Record<string, unknown>;
-      if (typeof value.nodeId !== "string") return [];
-      return [
-        {
-          label:
-            typeof value.displayName === "string"
-              ? value.displayName
-              : value.nodeId,
-          value: value.nodeId,
-        },
-      ];
-    });
-    if (namedNodes.length > 0) return namedNodes;
-
-    return Array.isArray(config.nodeIds)
-      ? config.nodeIds
-          .filter((nodeId): nodeId is string => typeof nodeId === "string")
-          .map((nodeId) => ({ label: nodeId, value: nodeId }))
-      : [];
-  }
-
-  if (connection.protocol === "s7" && Array.isArray(config.dataBlocks)) {
-    return config.dataBlocks.flatMap((block) => {
-      if (typeof block !== "object" || block === null) return [];
-      const value = block as Record<string, unknown>;
-      const dataBlock = value.dataBlock ?? value.range;
-      if (typeof dataBlock !== "string" || !dataBlock) return [];
-      const polling = value.polling;
-      const size = value.size;
-      const metadata = [
-        typeof polling === "string" || typeof polling === "number"
-          ? `${polling} ms`
-          : "",
-        typeof size === "string" || typeof size === "number"
-          ? `size: ${size}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" | ");
-      return [{ label: dataBlock, value: metadata }];
-    });
-  }
-
-  if (connection.protocol === "modbus.tcp" && Array.isArray(config.registers)) {
-    return config.registers.flatMap((register) => {
-      if (typeof register !== "object" || register === null) return [];
-      const value = register as Record<string, unknown>;
-      if (typeof value.name !== "string" || !value.name) return [];
-      const details = [value.registerType, value.address, value.dataType]
-        .filter(
-          (item): item is string | number =>
-            typeof item === "string" || typeof item === "number",
-        )
-        .join(" | ");
-      return [{ label: value.name, value: details }];
-    });
-  }
-
-  return [];
-}
-
-function hasDisplayableDetails(connection: SavedConnection) {
-  const details = connection.details.trim();
-  const normalizedDetails = details.toLowerCase();
-  return (
-    Boolean(details) &&
-    !normalizedDetails.startsWith("uri:") &&
-    !normalizedDetails.startsWith("remote-rack:")
-  );
-}
-
-function configuredS7DataBlocks(
-  connection: SavedConnection,
-): S7DataBlockStatus[] {
-  const dataBlocks = connection.config?.dataBlocks;
-  if (!Array.isArray(dataBlocks)) return [];
-
-  return dataBlocks.flatMap((block) => {
-    if (typeof block !== "object" || block === null) return [];
-    const value = block as Record<string, unknown>;
-    const range = value.dataBlock ?? value.range;
-    if (typeof range !== "string" || !range) return [];
-    return [{ dataBlock: range.replace(/^DB/i, "") }];
-  });
-}
-
-function S7PollingLabel({ status }: { status: S7PollingStatus }) {
-  const pollingStatus = status.pollingStatus || "METRICS_IN_CALCULATION";
-  const isHealthy = pollingStatus === "HEALTHY";
-  const isWarning = pollingStatus === "METRICS_IN_CALCULATION";
-
-  return (
-    <span
-      className={`fwe-s7-polling-status${isHealthy ? " is-healthy" : ""}${isWarning ? " is-warning" : ""}`}
-      title={status.error}
-    >
-      {isHealthy ? (
-        <IconCheckStatus aria-hidden="true" />
-      ) : isWarning ? (
-        <IconRefresh aria-hidden="true" />
-      ) : (
-        <IconFailure aria-hidden="true" />
-      )}
-      {pollingStatus.replaceAll("_", " ")}
-    </span>
-  );
-}
-
-function S7DataBlockDetails({
-  connection,
-  status,
-}: {
-  connection: SavedConnection;
-  status?: S7PollingStatus;
-}) {
-  const dataBlocks = status?.dataBlocks.length
-    ? status.dataBlocks
-    : configuredS7DataBlocks(connection);
-  const pollingStatus = status ?? {
-    pollingStatus: "METRICS_IN_CALCULATION",
-    dataBlocks: [],
-  };
-
-  return (
-    <section className="fwe-s7-data-blocks" aria-label="S7 data block status">
-      <div className="fwe-s7-data-blocks-scroll">
-        <table className="fwe-s7-data-blocks-table">
-          <thead>
-            <tr>
-              <th>Data Block</th>
-              <th>Cylinder Id</th>
-              <th>Valve Id</th>
-              <th>Valve Terminal Id</th>
-              <th>Polling Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dataBlocks.map((dataBlock) => (
-              <tr key={String(dataBlock.dataBlock)}>
-                <td>{String(dataBlock.dataBlock).replace(/^DB/i, "")}</td>
-                <td>{dataBlock.cylinderId || "--"}</td>
-                <td>{dataBlock.valveId || "--"}</td>
-                <td>{dataBlock.valveTerminalId || "--"}</td>
-                <td>
-                  <S7PollingLabel status={pollingStatus} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function ConnectionDetails({
-  connection,
-  s7Status,
-}: {
-  connection: SavedConnection;
-  s7Status?: S7PollingStatus;
-}) {
-  if (connection.protocol === "s7") {
-    return (
-      <div className="fwe-details">
-        <S7DataBlockDetails connection={connection} status={s7Status} />
-      </div>
-    );
-  }
-
-  const items = connectionDetailItems(connection);
-  const heading =
-    connection.protocol === "opc.tcp"
-      ? "Selected OPC UA nodes"
-      : connection.protocol === "modbus.tcp"
-        ? "Modbus registers"
-        : "S7 data blocks";
-
-  return (
-    <div className="fwe-details">
-      {connection.protocol !== "modbus.tcp" &&
-        hasDisplayableDetails(connection) && (
-        <p className="fwe-details-message">{connection.details}</p>
-        )}
-      {items.length > 0 && (
-        <section className="fwe-detail-items" aria-label={heading}>
-          <h3>{heading}</h3>
-          <ul>
-            {items.map((item) => (
-              <li key={`${item.label}-${item.value}`}>
-                <strong>{item.label}</strong>
-                {item.value && <span>{item.value}</span>}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-    </div>
   );
 }
 
 export default function Dashboard() {
-  const [page, setPage] = useState<Page>("Status");
-  const [asset, setAsset] = useState<Asset>("MIP");
-  const [assetsOpen, setAssetsOpen] = useState(false);
+  const { pathname } = useLocation();
+  const page = pathname === "/import" ? "Import" : "Status";
+  const [asset, setAsset] = useState<"MIP" | "ENI" | "MIE">("MIP");
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [openMenuIndex, setOpenMenuIndex] = useState<number | null>(null);
   const [mqttMenuOpen, setMqttMenuOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<{
-    index: number;
-    connection: SavedConnection;
-  } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SavedConnection | null>(null);
   const [notice, setNotice] = useState("");
-  const [mqttSummary, setMqttSummary] = useState<MqttSummary | null>(
-    readMqttSummary,
-  );
+  const [mqttSummary, setMqttSummary] = useState(readMqttSummary);
   const [connections, setConnections] =
-    useState<SavedConnection[]>(readConnections);
+    useState<SavedConnection[]>(readSavedConnections);
   const [rescanningKeys, setRescanningKeys] = useState<string[]>([]);
   const [s7Statuses, setS7Statuses] = useState<Record<string, S7PollingStatus>>(
     {},
   );
+  const [modbusStatuses, setModbusStatuses] = useState<
+    Record<string, ModbusConnectionStatus>
+  >({});
   const navigate = useNavigate();
 
   const expandedConnection =
     expandedIndex === null ? null : (connections[expandedIndex] ?? null);
+
+  useEffect(() => {
+    const targets = connections.filter(
+      (connection) => connection.protocol === "modbus.tcp",
+    );
+    if (targets.length === 0) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let requestTimeout: number | undefined;
+    let controller: AbortController;
+    const refreshStatus = async () => {
+      controller = new AbortController();
+      requestTimeout = window.setTimeout(() => controller.abort(), 5000);
+      const entries = await Promise.all(
+        targets.map(
+          async (connection) =>
+            [
+              modbusStatusKey(connection),
+              await loadModbusConnectionStatus(connection, controller.signal),
+            ] as const,
+        ),
+      );
+      window.clearTimeout(requestTimeout);
+      if (cancelled) return;
+      setModbusStatuses(Object.fromEntries(entries));
+      timer = window.setTimeout(() => void refreshStatus(), 1000);
+    };
+    void refreshStatus();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
+      window.clearTimeout(requestTimeout);
+    };
+  }, [connections]);
 
   useEffect(() => {
     if (!expandedConnection || expandedConnection.protocol !== "s7") return;
@@ -609,7 +180,7 @@ export default function Dashboard() {
   }, [expandedConnection]);
   useEffect(() => {
     const refreshConnections = () => {
-      setConnections(readConnections());
+      setConnections(readSavedConnections());
     };
     window.addEventListener("storage", refreshConnections);
     const refreshMqtt = () => setMqttSummary(readMqttSummary());
@@ -619,20 +190,8 @@ export default function Dashboard() {
         if (!configuration || !Array.isArray(configuration.messageSources))
           return;
         const prepared = prepareDatabaseConfiguration(configuration);
-        const uniqueConnections = deduplicateConnections(prepared.connections);
-        localStorage.setItem(
-          "festo-connections",
-          JSON.stringify(uniqueConnections),
-        );
-        localStorage.setItem(
-          "festo-mqtt-config",
-          JSON.stringify(prepared.mqttConfig),
-        );
-        localStorage.setItem("festo-default-connection-hidden", "true");
-        if (typeof configuration.id === "string") {
-          localStorage.setItem("festo-configuration-id", configuration.id);
-        }
-        setConnections(readConnections());
+        storeConfiguration(prepared);
+        setConnections(readSavedConnections());
         setMqttSummary(readMqttSummary());
       })
       .catch((error) =>
@@ -649,41 +208,34 @@ export default function Dashboard() {
   };
   const rescanConnections = async (targets: SavedConnection[]) => {
     const reconnectable = targets.filter(
-      (connection) => connection !== defaultConnection,
+      (connection) => !rescanningKeys.includes(connectionKey(connection)),
     );
     if (reconnectable.length === 0) return;
 
     const keys = reconnectable.map(connectionKey);
     setRescanningKeys((current) => [...new Set([...current, ...keys])]);
-    const results = await Promise.all(reconnectable.map(reconnect));
-    storeRescanResults(results);
-    setConnections(readConnections());
-    setRescanningKeys((current) =>
-      current.filter((key) => !keys.includes(key)),
-    );
-
-    const connected = results.filter(
-      (result) => result.status === "connected",
-    ).length;
-    const unsupported = results.filter((result) => !result.supported).length;
-    notify(
-      unsupported > 0
-        ? `${connected} connected; ${unsupported} PLC type is not supported yet`
-        : `${connected} of ${results.length} PLC connections succeeded`,
-    );
-  };
-  const deleteConnection = async (
-    index: number,
-    connection: SavedConnection,
-  ) => {
     try {
-      if (connection === defaultConnection) {
-        localStorage.setItem("festo-default-connection-hidden", "true");
-        setConnections(readConnections());
-        setExpandedIndex(null);
-        notify("Connection deleted");
-        return;
-      }
+      const results = await Promise.all(reconnectable.map(reconnect));
+      storeRescanResults(results);
+      setConnections(readSavedConnections());
+
+      const connected = results.filter(
+        (result) => result.status === "connected",
+      ).length;
+      const unsupported = results.filter((result) => !result.supported).length;
+      const messages = [`${connected} of ${results.length} PLC connections succeeded`];
+      if (unsupported > 0) messages.push(`${unsupported} PLC type(s) not supported yet`);
+      notify(messages.join("; "));
+    } catch {
+      notify("Unable to rescan PLC connections");
+    } finally {
+      setRescanningKeys((current) =>
+        current.filter((key) => !keys.includes(key)),
+      );
+    }
+  };
+  const deleteConnection = async (connection: SavedConnection) => {
+    try {
       if (connection.protocol === "modbus.tcp") {
         const stopResponse = await fetch(
           `/api/plcs/modbus/${encodeURIComponent(connection.id)}`,
@@ -693,16 +245,10 @@ export default function Dashboard() {
           throw new Error("Unable to stop Modbus polling");
         }
       }
-      const saved = JSON.parse(
-        localStorage.getItem("festo-connections") ?? "[]",
-      ) as SavedConnection[];
-      const defaultVisible = connections[0] === defaultConnection;
-      const uniqueKey =
-        connection.recordId ?? `${connection.protocol}-${connection.id}`;
-      await deleteConfigurationSource(uniqueKey);
-      saved.splice(index - (defaultVisible ? 1 : 0), 1);
-      localStorage.setItem("festo-connections", JSON.stringify(saved));
-      setConnections(readConnections());
+      const key = connectionKey(connection);
+      await deleteConfigurationSource(key);
+      storeConnections(readSavedConnections().filter((item) => connectionKey(item) !== key));
+      setConnections(readSavedConnections());
       setExpandedIndex(null);
       notify("Connection deleted");
     } catch {
@@ -712,89 +258,19 @@ export default function Dashboard() {
 
   return (
     <div className="fwe-app">
-      <header className="fwe-fixed-header">
-        <nav className="fwe-navbar">
-          <div className="fwe-navbar-inner">
-            <nav className="fwe-navlist" aria-label="Main navigation">
-              <div className="fwe-assets-menu">
-                <button
-                  className="fwe-dashboard-link"
-                  type="button"
-                  aria-label="Go to Dashboard"
-                  onClick={() => navigate("/dashboard")}
-                >
-                  <img src={dashboardIcon} alt="Dashboard" />
-                </button>
-                <button
-                  className="fwe-assets-trigger"
-                  type="button"
-                  aria-expanded={assetsOpen}
-                  aria-label="Open asset menu"
-                  onClick={() => setAssetsOpen(!assetsOpen)}
-                >
-                  <IconMenu aria-hidden="true" />
-                </button>
-                {assetsOpen && (
-                  <div className="fwe-assets-dropdown" role="menu">
-                    <div className="fwe-assets-dropdown-title">
-                      Select asset
-                    </div>
-                    {(["MIP", "ENI", "MIE"] as Asset[]).map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        role="menuitem"
-                        className={asset === item ? "is-selected" : ""}
-                        onClick={() => {
-                          setAsset(item);
-                          setAssetsOpen(false);
-                        }}
-                      >
-                        <span>{item}</span>
-                        {asset === item && (
-                          <span className="fwe-selected-mark">✓</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {(["Status", "Import", "Downloads"] as Page[]).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={page === item ? "fwe-active" : ""}
-                  onClick={() => {
-                    if (item === "Downloads") {
-                      window.location.assign(downloadsUrl);
-                      return;
-                    }
-                    setPage(item);
-                  }}
-                >
-                  {item}
-                </button>
-              ))}
-            </nav>
-            <div className="fwe-logo-container">
-              <div className="fwe-festo-logo" aria-label="Festo" />
-            </div>
-          </div>
-        </nav>
-      </header>
-      <div className="fwe-navbar-spacer" />
+      <AppHeader asset={asset} onAssetChange={setAsset} />
       <main className="fwe-main-content">
         {page === "Import" ? (
           <ImportPage
             onImported={() => {
-              setConnections(readConnections());
+              setConnections(readSavedConnections());
               setMqttSummary(readMqttSummary());
-              setPage("Status");
+              navigate("/dashboard");
               notify("Configuration imported");
             }}
-            onCancel={() => setPage("Status")}
+            onCancel={() => navigate("/dashboard")}
           />
-        ) : asset === "MIP" && page === "Status" ? (
+        ) : asset === "MIP" ? (
           <div className="fwe-layout">
             <section className="fwe-status-list">
               <div className="fwe-section-heading">
@@ -809,27 +285,12 @@ export default function Dashboard() {
                         if (configuration) {
                           const prepared =
                             prepareDatabaseConfiguration(configuration);
-                          localStorage.setItem(
-                            "festo-connections",
-                            JSON.stringify(
-                              deduplicateConnections(prepared.connections),
-                            ),
-                          );
-                          localStorage.setItem(
-                            "festo-mqtt-config",
-                            JSON.stringify(prepared.mqttConfig),
-                          );
-                          if (typeof configuration.id === "string") {
-                            localStorage.setItem(
-                              "festo-configuration-id",
-                              configuration.id,
-                            );
-                          }
+                          storeConfiguration(prepared);
                         } else {
-                          localStorage.setItem("festo-connections", "[]");
+                          storeConnections([]);
                           localStorage.removeItem("festo-mqtt-config");
                         }
-                        setConnections(readConnections());
+                        setConnections(readSavedConnections());
                         setMqttSummary(readMqttSummary());
                         notify("Configuration refreshed");
                       } catch (error) {
@@ -858,6 +319,7 @@ export default function Dashboard() {
                   <Action
                     icon={<IconAdd aria-hidden="true" />}
                     label="Add PLC"
+                    primary
                     onClick={() => navigate("/add")}
                   />
                 </div>
@@ -877,133 +339,144 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {connections.map((connection, index) => (
-                      <Fragment
-                        key={`${connection.protocol}-${connection.id}-${index}`}
-                      >
-                        <tr
-                          className={
-                            expandedIndex === index ? "fwe-expanded" : ""
-                          }
-                          key={`${connection.protocol}-${connection.id}-${index}`}
-                        >
-                          <td className="fwe-icon-cell">
-                            <button
-                              className={`fwe-expand ${expandedIndex === index ? "is-expanded" : ""}`}
-                              type="button"
-                              aria-label="Toggle connection details"
-                              onClick={() =>
-                                setExpandedIndex(
-                                  expandedIndex === index ? null : index,
-                                )
-                              }
-                            >
-                              ›
-                            </button>
-                          </td>
-                          <td>{connection.id}</td>
-                          <td>{connection.protocol}</td>
-                          <td>{connection.host}</td>
-                          <td>{connection.port}</td>
-                          <td className="fwe-connection-details">
-                            {hasDisplayableDetails(connection) && (
-                              <span className="fwe-connection-details-content">
-                                {connection.details}
-                              </span>
-                            )}
-                          </td>
-                          <td>
-                            <ConnectionStatus status={connection.status} />
-                          </td>
-                          <td className="fwe-menu-cell">
-                            <button
-                              className="fwe-icon-button"
-                              type="button"
-                              aria-label="PLC connection actions"
-                              onClick={() =>
-                                setOpenMenuIndex(
-                                  openMenuIndex === index ? null : index,
-                                )
-                              }
-                            >
-                              <IconMore />
-                            </button>
-                            {openMenuIndex === index && (
-                              <div className="fwe-row-menu" role="menu">
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="fwe-menu-edit"
-                                  onClick={() => {
-                                    const path = editPaths[connection.protocol];
-                                    if (path) {
-                                      navigate(path, {
-                                        state: { connection },
-                                      });
-                                    } else {
-                                      notify("This PLC type cannot be edited");
-                                    }
-                                    setOpenMenuIndex(null);
-                                  }}
-                                >
-                                  <IconEdit aria-hidden="true" />
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="fwe-menu-delete"
-                                  onClick={() => {
-                                    setDeleteTarget({ index, connection });
-                                    setOpenMenuIndex(null);
-                                  }}
-                                >
-                                  <IconDelete aria-hidden="true" />
-                                  Delete
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  disabled={rescanningKeys.includes(
-                                    connectionKey(connection),
-                                  )}
-                                  onClick={() => {
-                                    void rescanConnections([connection]);
-                                    setOpenMenuIndex(null);
-                                  }}
-                                >
-                                  {rescanningKeys.includes(
-                                    connectionKey(connection),
-                                  ) ? (
-                                    <LoadingIndicator size="small">
-                                      Rescanning...
-                                    </LoadingIndicator>
-                                  ) : (
-                                    <>
-                                      <IconUpdate aria-hidden="true" />
-                                      Rescan
-                                    </>
-                                  )}
-                                </button>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                        {expandedIndex === index && (
+                    {connections.length === 0 && (
+                      <tr>
+                        <td colSpan={8}>No PLC connections configured.</td>
+                      </tr>
+                    )}
+                    {connections.map((connection, index) => {
+                      const liveStatus =
+                        modbusStatuses[modbusStatusKey(connection)];
+                      const status = connectionDisplayStatus(
+                        connection,
+                        liveStatus,
+                      );
+                      const error = connectionDisplayError(
+                        connection,
+                        liveStatus,
+                      );
+                      return (
+                        <Fragment key={connectionKey(connection)}>
                           <tr
-                            className="fwe-details-row"
-                            key={`${connection.protocol}-${connection.id}-${index}-details`}
+                            className={
+                              expandedIndex === index ? "fwe-expanded" : ""
+                            }
                           >
-                            <td colSpan={8}>
-                              <ConnectionDetails
-                                connection={connection}
-                                s7Status={s7Statuses[connection.id]}
+                            <td className="fwe-icon-cell">
+                              <button
+                                className={`fwe-expand ${expandedIndex === index ? "is-expanded" : ""}`}
+                                type="button"
+                                aria-label="Toggle connection details"
+                                onClick={() =>
+                                  setExpandedIndex(
+                                    expandedIndex === index ? null : index,
+                                  )
+                                }
+                              >
+                                ›
+                              </button>
+                            </td>
+                            <td>{connection.id}</td>
+                            <td>{connection.protocol}</td>
+                            <td>{connection.host}</td>
+                            <td>{connection.port}</td>
+                            <td className="fwe-connection-details" />
+                            <td>
+                              <ConnectionStatus
+                                status={status}
+                                error={error}
                               />
                             </td>
+                            <td className="fwe-menu-cell">
+                              <button
+                                className="fwe-icon-button"
+                                type="button"
+                                aria-label="PLC connection actions"
+                                onClick={() =>
+                                  setOpenMenuIndex(
+                                    openMenuIndex === index ? null : index,
+                                  )
+                                }
+                              >
+                                <IconMore />
+                              </button>
+                              {openMenuIndex === index && (
+                                <div className="fwe-row-menu" role="menu">
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="fwe-menu-edit"
+                                    onClick={() => {
+                                      const path = editPaths[connection.protocol];
+                                      if (path) {
+                                        navigate(path, {
+                                          state: { connection },
+                                        });
+                                      } else {
+                                        notify("This PLC type cannot be edited");
+                                      }
+                                      setOpenMenuIndex(null);
+                                    }}
+                                  >
+                                    <IconEdit aria-hidden="true" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="fwe-menu-delete"
+                                    onClick={() => {
+                                      setDeleteTarget(connection);
+                                      setOpenMenuIndex(null);
+                                    }}
+                                  >
+                                    <IconDelete aria-hidden="true" />
+                                    Delete
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    disabled={rescanningKeys.includes(
+                                      connectionKey(connection),
+                                    )}
+                                    onClick={() => {
+                                      void rescanConnections([connection]);
+                                      setOpenMenuIndex(null);
+                                    }}
+                                  >
+                                    {rescanningKeys.includes(
+                                      connectionKey(connection),
+                                    ) ? (
+                                      <LoadingIndicator size="small">
+                                        Rescanning...
+                                      </LoadingIndicator>
+                                    ) : (
+                                      <>
+                                        <IconUpdate aria-hidden="true" />
+                                        Rescan
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                              )}
+                            </td>
                           </tr>
-                        )}
-                      </Fragment>
-                    ))}
+                          {expandedIndex === index && (
+                            <tr
+                              className="fwe-details-row"
+                            >
+                              <td colSpan={8}>
+                                <ConnectionDetails
+                                  connection={connection}
+                                  s7Status={s7Statuses[connection.id]}
+                                  error={error}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1024,11 +497,11 @@ export default function Dashboard() {
                   <tbody>
                     <tr>
                       <td className="fwe-icon-cell" />
-                      <td>12</td>
+                      <td>{mqttSummary?.clientId || "—"}</td>
                       <td>
                         {mqttSummary
                           ? `${mqttSummary.protocol}${mqttSummary.host}:${mqttSummary.port}`
-                          : "tcp://192.168.0.1:12"}
+                          : "Not configured"}
                       </td>
                       <td>
                         <ConnectionStatus
@@ -1072,25 +545,12 @@ export default function Dashboard() {
           <section className="fwe-placeholder">
             <h1>{asset}</h1>
             <p>
-              {asset === "MIP"
-                ? `The ${page.toLowerCase()} view is ready.`
-                : `${asset} dashboard is ready to be connected.`}
+              {asset} dashboard is ready to be connected.
             </p>
           </section>
         )}
       </main>
-      <footer className="fwe-footer">
-        <div>
-          <button
-            type="button"
-            onClick={() => notify("Festo AX Connector v24.0.6")}
-          >
-            Version 24.0.6
-          </button>
-          <button type="button">Privacy Policy</button>
-          <button type="button">Imprint</button>
-        </div>
-      </footer>
+      <AppFooter onVersionClick={() => notify("Festo AX Connector v24.0.6")} />
       {notice && (
         <div className="fwe-snackbar" role="status">
           {notice}
@@ -1120,7 +580,7 @@ export default function Dashboard() {
               <h1 id="delete-plc-title">Delete PLC?</h1>
             </div>
             <div className="fwe-modal-body">
-              Do you want to delete &quot;{deleteTarget.connection.id}&quot;
+              Do you want to delete &quot;{deleteTarget.id}&quot;
               permanently?
             </div>
             <div className="fwe-modal-footer">
@@ -1135,7 +595,7 @@ export default function Dashboard() {
                 className="fwe-modal-confirm"
                 type="button"
                 onClick={() => {
-                  deleteConnection(deleteTarget.index, deleteTarget.connection);
+                  void deleteConnection(deleteTarget);
                   setDeleteTarget(null);
                 }}
               >

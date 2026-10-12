@@ -7,9 +7,9 @@ import {
 } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { configString, saveConnection } from "./storage";
-import type { SavedConnection } from "./storage";
-import { saveCurrentConfiguration } from "../configurationApi";
+import { configString, readMqttConfig, saveConnection } from "../storage";
+import type { SavedConnection } from "../storage";
+import { connectPlc, saveCurrentConfiguration } from "../configurationApi";
 
 type DataBlock = {
   id: number;
@@ -73,20 +73,9 @@ export default function Siemens() {
     dataBlocks.every((item) => item.dataBlock && item.polling),
   );
   const buildBackendConfig = () => {
-    let mqtt: Record<string, unknown> | undefined;
-    try {
-      const savedMqtt = JSON.parse(
-        localStorage.getItem("festo-mqtt-config") ?? "null",
-      ) as Record<string, unknown> | null;
-      if (savedMqtt && typeof savedMqtt.host === "string" && savedMqtt.host) {
-        mqtt = savedMqtt;
-      }
-    } catch {
-      mqtt = undefined;
-    }
-
     return {
       id: values.id,
+      previousId: editConnection?.id,
       host: values.host,
       port: Number(values.port),
       rack: Number(values.rack),
@@ -98,35 +87,21 @@ export default function Siemens() {
         ...(item.size ? { size: Number(item.size) } : {}),
       })),
       messageLayout: "mip",
-      mqtt,
+      mqtt: readMqttConfig(),
       mqttTopic: `festo-ax/pni/${values.id}`,
     };
   };
   const connectToBackend = async () => {
     setTesting(true);
     try {
-      const response = await fetch("/api/plcs/siemens/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildBackendConfig()),
-      });
-      const result = (await response.json()) as {
-        connected?: boolean;
-        error?: string;
-      };
-      const status =
-        response.ok && result.connected ? "connected" : "disconnected";
-      setConnectionStatus(status);
-      setConnectionError(
-        status === "connected"
-          ? ""
-          : (result.error ?? "Unable to connect to the Siemens PLC."),
+      const result = await connectPlc(
+        "/api/plcs/siemens/connect",
+        buildBackendConfig(),
+        "Unable to connect to the Siemens PLC",
       );
-      return status;
-    } catch {
-      setConnectionStatus("disconnected");
-      setConnectionError("Unable to reach the PLC connection service.");
-      return "disconnected" as const;
+      setConnectionStatus(result.status);
+      setConnectionError(result.connectionError ?? "");
+      return result;
     } finally {
       setTesting(false);
     }
@@ -134,7 +109,7 @@ export default function Siemens() {
   const save = async () => {
     setSubmitted(true);
     if (!valid) return;
-    const status = await connectToBackend();
+    const result = await connectToBackend();
     saveConnection({
       id: values.id,
       recordId: editConnection?.recordId,
@@ -142,8 +117,7 @@ export default function Siemens() {
       host: values.host,
       port: values.port,
       details: `remote-rack: ${values.rack}, remote-slot: ${values.slot}, data-blocks: ${dataBlocks.map((item) => `${item.dataBlock}, polling: ${item.polling} ms`).join("; ")}`,
-      status,
-      editPath: "/add/siemens",
+      ...result,
       config: { ...values, dataBlocks, messageLayout: "mip" },
     });
     await saveCurrentConfiguration();
@@ -263,7 +237,7 @@ export default function Siemens() {
         <FormActions
           valid={valid}
           onSave={save}
-          onCancel={() => navigate("/add")}
+          onCancel={() => navigate(editConnection ? "/dashboard" : "/add")}
         />
       </div>
     </PlcShell>

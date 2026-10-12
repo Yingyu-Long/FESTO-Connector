@@ -57,7 +57,7 @@ const MIP_TIME_FIELDS = [
 ];
 
 //get the range of data blocks to read based on the configuration
-export function parseDataBlockRange(range) {
+function parseDataBlockRange(range) {
   const match = String(range ?? "")
     .trim()
     .match(/^(?:DB)?(\d+)(?:\s*-\s*(\d+))?$/i);
@@ -128,7 +128,7 @@ function mqttTopicSegment(identifier, fieldName, dataBlock, offset) {
   }
 
   // Encode separators and MQTT wildcard characters inside PLC identifier values.
-  return encodeURIComponent(text.replace(/\u0000/g, ""));
+  return encodeURIComponent(text.replaceAll("\0", ""));
 }
 
 /**

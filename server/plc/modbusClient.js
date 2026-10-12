@@ -1,4 +1,12 @@
 import ModbusRTU from "modbus-serial";
+import {
+  MODBUS_DATABLOCK_DEFAULT_START_ADDRESS,
+  MODBUS_DATABLOCK_FIELDS,
+  MODBUS_DATABLOCK_REGISTER_COUNT,
+} from "../../shared/modbusDatablock.js";
+
+// FC03 allows up to 125 registers per request; keep each FB in one response.
+const DATABLOCKS_PER_REQUEST = Math.floor(125 / MODBUS_DATABLOCK_REGISTER_COUNT);
 
 const REGISTER_TYPES = new Set([
   "Coil",
@@ -22,14 +30,73 @@ export class ModbusConfigurationError extends Error {
   }
 }
 
+export function modbusErrorMessage(error) {
+  // modbus-serial also rejects with objects that do not extend Error.
+  return typeof error?.message === "string" ? error.message : String(error);
+}
+
 function integer(value, label, minimum, maximum) {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+  if (
+    !["number", "string"].includes(typeof value) ||
+    (typeof value === "string" && !value.trim()) ||
+    !Number.isInteger(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
     throw new ModbusConfigurationError(
       `${label} must be an integer from ${minimum} to ${maximum}`,
     );
   }
   return parsed;
+}
+
+function normalizeDatablocks(config) {
+  const startAddress = integer(
+    config.startAddress === undefined
+      ? MODBUS_DATABLOCK_DEFAULT_START_ADDRESS
+      : config.startAddress,
+    "Datablock start address",
+    0,
+    65535,
+  );
+  const maximumBlocks = Math.floor(
+    (65536 - startAddress) / MODBUS_DATABLOCK_REGISTER_COUNT,
+  );
+  if (maximumBlocks === 0) {
+    throw new ModbusConfigurationError(
+      "Datablock exceeds the Modbus address range",
+    );
+  }
+  const registerCount = integer(
+    config.registerCount,
+    "Datablock count",
+    1,
+    maximumBlocks,
+  );
+  if (
+    !Array.isArray(config.blockTopics) ||
+    config.blockTopics.length !== registerCount
+  ) {
+    throw new ModbusConfigurationError(
+      "Every Datablock needs an MQTT topic",
+    );
+  }
+  const blockTopics = config.blockTopics.map((value, index) => {
+    const topic = typeof value === "string" ? value.trim() : "";
+    if (
+      !topic ||
+      /[+#]/.test(topic) ||
+      topic.includes("\0") ||
+      Buffer.byteLength(topic, "utf8") > 65535
+    ) {
+      throw new ModbusConfigurationError(
+        `Datablock ${index + 1} needs a valid MQTT publish topic (no +, # or null characters)`,
+      );
+    }
+    return topic;
+  });
+  return { startAddress, registerCount, blockTopics, registers: [] };
 }
 
 function registerLength(dataType) {
@@ -103,22 +170,27 @@ export function normalizeModbusConfig(config) {
   const host = String(config.host ?? "").trim();
   if (!id) throw new ModbusConfigurationError("Modbus PLC id is required");
   if (!host) throw new ModbusConfigurationError("Modbus host is required");
-  if (!Array.isArray(config.registers) || config.registers.length === 0) {
-    throw new ModbusConfigurationError(
-      "At least one Modbus register is required",
-    );
-  }
-
-  const registers = config.registers.map(normalizeRegister);
-  const names = new Set();
-  for (const register of registers) {
-    const key = register.name.toLowerCase();
-    if (names.has(key)) {
+  let readingConfig;
+  if (config.readMode === "Read by Datablocks") {
+    readingConfig = normalizeDatablocks(config);
+  } else {
+    if (!Array.isArray(config.registers) || config.registers.length === 0) {
       throw new ModbusConfigurationError(
-        `Register name ${register.name} is duplicated`,
+        "At least one Modbus register is required",
       );
     }
-    names.add(key);
+    const registers = config.registers.map(normalizeRegister);
+    const names = new Set();
+    for (const register of registers) {
+      const key = register.name.toLowerCase();
+      if (names.has(key)) {
+        throw new ModbusConfigurationError(
+          `Register name ${register.name} is duplicated`,
+        );
+      }
+      names.add(key);
+    }
+    readingConfig = { registers };
   }
 
   return {
@@ -131,10 +203,10 @@ export function normalizeModbusConfig(config) {
     polling: integer(
       config.polling ?? 500,
       "Modbus polling interval",
-      100,
+      10,
       3600000,
     ),
-    registers,
+    ...readingConfig,
   };
 }
 
@@ -187,7 +259,7 @@ export async function disconnectModbus(client) {
   });
 }
 
-export function decodeModbusRegisters(words, dataType, wordOrder) {
+function decodeModbusRegisters(words, dataType, wordOrder) {
   const orderedWords =
     wordOrder === "Low word first" && words.length === 2
       ? [words[1], words[0]]
@@ -217,7 +289,7 @@ export function decodeModbusRegisters(words, dataType, wordOrder) {
   }
 }
 
-export async function readModbusRegister(client, register) {
+async function readModbusRegister(client, register) {
   let response;
   switch (register.registerType) {
     case "Coil":
@@ -269,13 +341,93 @@ export async function readModbusRegisters(client, registers) {
   return values;
 }
 
+function decodeModbusDatablock(words) {
+  if (
+    !Array.isArray(words) ||
+    words.length !== MODBUS_DATABLOCK_REGISTER_COUNT ||
+    words.some((word) => !Number.isInteger(word) || word < 0 || word > 65535)
+  ) {
+    throw new Error(
+      `Datablock response must contain ${MODBUS_DATABLOCK_REGISTER_COUNT} valid registers`,
+    );
+  }
+  const buffer = Buffer.alloc(MODBUS_DATABLOCK_REGISTER_COUNT * 2);
+  words.forEach((word, index) => buffer.writeUInt16BE(word, index * 2));
+  return Object.fromEntries(
+    MODBUS_DATABLOCK_FIELDS.map((field) => {
+      const offset = field.offset * 2;
+      let value;
+      if (field.dataType === "ULINT") {
+        // Decimal strings retain all 64 bits when serialized as JSON.
+        value = buffer.readBigUInt64BE(offset).toString();
+      } else if (field.dataType === "UDINT") {
+        value = buffer.readUInt32BE(offset);
+      } else {
+        // The PLC layout specifies 48 string bytes, without a length header.
+        const bytes = buffer.subarray(offset, offset + field.registerCount * 2);
+        const end = bytes.indexOf(0);
+        value = bytes.subarray(0, end < 0 ? bytes.length : end).toString("utf8");
+      }
+      return [field.name, value];
+    }),
+  );
+}
+
+export async function readModbusDatablocks(client, config) {
+  const dataBlocks = [];
+  for (
+    let index = 0;
+    index < config.registerCount;
+    index += DATABLOCKS_PER_REQUEST
+  ) {
+    const blockCount = Math.min(
+      DATABLOCKS_PER_REQUEST,
+      config.registerCount - index,
+    );
+    const startAddress =
+      config.startAddress + index * MODBUS_DATABLOCK_REGISTER_COUNT;
+    const registerCount = blockCount * MODBUS_DATABLOCK_REGISTER_COUNT;
+    const response = await client.readHoldingRegisters(
+      startAddress,
+      registerCount,
+    );
+    if (!Array.isArray(response.data) || response.data.length !== registerCount) {
+      throw new Error(
+        `Datablock batch response must contain ${registerCount} registers`,
+      );
+    }
+    for (let offset = 0; offset < blockCount; offset += 1) {
+      const registerOffset = offset * MODBUS_DATABLOCK_REGISTER_COUNT;
+      const values = decodeModbusDatablock(
+        response.data.slice(
+          registerOffset,
+          registerOffset + MODBUS_DATABLOCK_REGISTER_COUNT,
+        ),
+      );
+      const blockIndex = index + offset;
+      dataBlocks.push({
+        index: blockIndex,
+        startAddress: startAddress + registerOffset,
+        registerCount: MODBUS_DATABLOCK_REGISTER_COUNT,
+        topic: config.blockTopics[blockIndex],
+        values,
+      });
+    }
+  }
+  return dataBlocks;
+}
+
+export async function readModbusSample(client, config) {
+  if (config.readMode === "Read by Datablocks") {
+    return await readModbusDatablocks(client, config);
+  }
+  return await readModbusRegister(client, config.registers[0]);
+}
+
 export async function testModbusConnection(config) {
   const connection = await connectModbus(config);
   try {
-    return await readModbusRegister(
-      connection.client,
-      connection.config.registers[0],
-    );
+    return await readModbusSample(connection.client, connection.config);
   } finally {
     await disconnectModbus(connection.client);
   }

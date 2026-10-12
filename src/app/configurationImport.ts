@@ -1,5 +1,5 @@
-import { deduplicateConnections } from "./Add/storage";
-import type { SavedConnection } from "./Add/storage";
+import { deduplicateConnections, storeConnections } from "./storage";
+import type { SavedConnection } from "./storage";
 
 export type PreparedConfiguration = {
   connections: SavedConnection[];
@@ -50,6 +50,14 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
   const protocol = uri.protocol.replace(":", "");
   const uniqueKey =
     typeof source.uniqueKey === "string" ? source.uniqueKey : newId();
+  const status: SavedConnection["status"] =
+    source.status === "connected" || source.status === "error"
+      ? source.status
+      : "disconnected";
+  const connectionError =
+    status !== "connected" && typeof source.connectionError === "string"
+      ? source.connectionError
+      : undefined;
 
   if (protocol === "s7") {
     const configuration = isRecord(source.s7PniConfiguration)
@@ -62,9 +70,11 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
       protocol: "s7",
       host: uri.hostname,
       port: uri.port || "102",
-      details: `remote-rack: ${uri.searchParams.get("remote-rack") ?? "0"}, remote-slot: ${uri.searchParams.get("remote-slot") ?? "1"}`,
-      status: "disconnected",
-      editPath: "/add/siemens",
+      details: typeof source.details === "string"
+        ? source.details
+        : `remote-rack: ${uri.searchParams.get("remote-rack") ?? "0"}, remote-slot: ${uri.searchParams.get("remote-slot") ?? "1"}`,
+      status,
+      connectionError,
       config: {
         id: source.id,
         host: uri.hostname,
@@ -91,9 +101,11 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
       protocol: "ads",
       host: uri.hostname,
       port: uri.port || "48898",
-      details: `target-net-id: ${uri.searchParams.get("targetAmsNetId") ?? targetNetId}, target-port: ${uri.searchParams.get("targetAmsPort") ?? targetPort}`,
-      status: "disconnected",
-      editPath: "/add/beckhoff",
+      details: typeof source.details === "string"
+        ? source.details
+        : `target-net-id: ${uri.searchParams.get("targetAmsNetId") ?? targetNetId}, target-port: ${uri.searchParams.get("targetAmsPort") ?? targetPort}`,
+      status,
+      connectionError,
       config: {
         id: source.id,
         host: uri.hostname,
@@ -118,9 +130,14 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
     protocol,
     host: uri.hostname,
     port: uri.port || "",
-    details: "",
-    status: "disconnected",
-    config: isRecord(source[configurationKey]) ? source[configurationKey] : {},
+    details: typeof source.details === "string" ? source.details : "",
+    status,
+    connectionError,
+    config: isRecord(source[configurationKey])
+      ? source[configurationKey]
+      : isRecord(source.configuration)
+        ? source.configuration
+        : {},
   };
 }
 
@@ -163,15 +180,11 @@ export function prepareConfiguration(value: unknown): PreparedConfiguration {
 }
 
 export function storeConfiguration(configuration: PreparedConfiguration) {
-  localStorage.setItem(
-    "festo-connections",
-    JSON.stringify(deduplicateConnections(configuration.connections)),
-  );
+  storeConnections(configuration.connections);
   localStorage.setItem(
     "festo-mqtt-config",
     JSON.stringify(configuration.mqttConfig),
   );
-  localStorage.setItem("festo-default-connection-hidden", "true");
   if (configuration.configurationId) {
     localStorage.setItem(
       "festo-configuration-id",

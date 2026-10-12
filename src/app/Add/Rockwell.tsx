@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { LoadingIndicator } from "@festo-ui/react";
 import { IconConnected, IconFailure, IconPlus } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
-import { configString, saveConnection } from "./storage";
-import type { SavedConnection } from "./storage";
+import { configString, saveConnection } from "../storage";
+import type { SavedConnection } from "../storage";
 import { saveCurrentConfiguration } from "../configurationApi";
 
 export default function Rockwell() {
@@ -27,8 +26,6 @@ export default function Rockwell() {
   );
   const [submitted, setSubmitted] = useState(false);
   const [tested, setTested] = useState(false);
-  const [connectionFailed, setConnectionFailed] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [rows, setRows] = useState([0]);
   const set = (key: keyof typeof values) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -41,14 +38,6 @@ export default function Rockwell() {
     values.dataBlock &&
     values.polling,
   );
-  const testConnection = async () => {
-    setTested(true);
-    if (!valid) return;
-    setTesting(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    setConnectionFailed(true);
-    setTesting(false);
-  };
   const save = async () => {
     setSubmitted(true);
     if (!valid) return;
@@ -60,7 +49,7 @@ export default function Rockwell() {
       port: values.port,
       details: `backplane: ${values.backplane}, slot: ${values.slot}, endian: ${endian}, data-blocks: ${values.dataBlock}, polling: ${values.polling} ms`,
       status: "disconnected",
-      editPath: "/add/rockwell",
+      connectionError: "Rockwell EtherNet/IP connections are not supported yet",
       config: { ...values, endian },
     };
     saveConnection(connection);
@@ -127,25 +116,21 @@ export default function Rockwell() {
                 type="button"
                 className="fwe-btn no-wrap"
                 aria-label="Test connection"
-                onClick={() => void testConnection()}
-                disabled={testing}
+                onClick={() => setTested(true)}
               >
                 <IconConnected />
                 Test connection
               </button>
-              {testing && (
-                <LoadingIndicator size="small">Loading ...</LoadingIndicator>
-              )}
               {tested && !valid && (
                 <div className="fwe-connection-error">
                   <IconFailure />
                   Please fill out all required fields correctly.
                 </div>
               )}
-              {connectionFailed && (
+              {tested && valid && (
                 <span className="fwe-status">
                   <IconFailure aria-hidden="true" />
-                  Connection failed
+                  Rockwell EtherNet/IP connections are not supported yet
                 </span>
               )}
             </div>
@@ -195,7 +180,7 @@ export default function Rockwell() {
         <FormActions
           valid={valid}
           onSave={save}
-          onCancel={() => navigate("/add")}
+          onCancel={() => navigate(editConnection ? "/dashboard" : "/add")}
         />
       </div>
     </PlcShell>
