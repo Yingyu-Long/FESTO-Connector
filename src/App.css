@@ -1178,13 +1178,13 @@ button:focus-visible {
   gap: 14px;
   flex-wrap: wrap;
 }
-.fwe-test-row .fwe-btn > svg {
+:is(.fwe-test-row .fwe-btn, .fwe-modbus-action-button) > svg {
   width: var(--fwe-icon-size);
   height: var(--fwe-icon-size);
   margin-right: 8px;
   flex-shrink: 0;
 }
-.fwe-test-row .fwe-btn,
+:is(.fwe-test-row .fwe-btn, .fwe-modbus-action-button),
 .fwe-opcua-browse .fwe-btn {
   display: inline-flex;
   align-items: center;
@@ -1201,7 +1201,7 @@ button:focus-visible {
   font-weight: 500;
   font-size: var(--fwe-font-size);
 }
-.fwe-test-row .fwe-btn {
+:is(.fwe-test-row .fwe-btn, .fwe-modbus-action-button) {
   flex: 0 0 auto;
   min-width: 154px;
 }
@@ -1209,14 +1209,14 @@ button:focus-visible {
 .fwe-test-row .fwe-connection-error {
   min-width: 0;
 }
-.fwe-test-row .fwe-btn:hover,
-.fwe-test-row .fwe-btn:focus-visible,
+:is(.fwe-test-row .fwe-btn, .fwe-modbus-action-button):hover,
+:is(.fwe-test-row .fwe-btn, .fwe-modbus-action-button):focus-visible,
 .fwe-opcua-browse .fwe-btn:hover,
 .fwe-opcua-browse .fwe-btn:focus-visible {
   color: var(--fwe-hero-hover);
   background: #dcecf6;
 }
-.fwe-test-row .fwe-btn:disabled,
+:is(.fwe-test-row .fwe-btn, .fwe-modbus-action-button):disabled,
 .fwe-opcua-browse .fwe-btn:disabled {
   color: var(--fwe-text-disabled);
   background: var(--fwe-gray-200);
@@ -1261,6 +1261,18 @@ button:focus-visible {
   gap: 8px;
   align-items: center;
   cursor: pointer;
+}
+.fwe-opcua-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  color: var(--fwe-text-light);
+  cursor: grab;
+  user-select: none;
+}
+.fwe-opcua-drag-handle:active {
+  cursor: grabbing;
 }
 .fwe-opcua-node-row input {
   width: 16px;
@@ -1434,6 +1446,52 @@ button:focus-visible {
   padding: 0;
   border: 0;
 }
+.fwe-customised-help {
+  color: var(--fwe-text-light);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 0 20px;
+}
+.fwe-customised-heading { margin: 30px 0 12px; }
+.fwe-customised-table-scroll { overflow-x: auto; }
+.fwe-customised-table { width: 100%; min-width: 780px; border-collapse: collapse; }
+.fwe-customised-table th, .fwe-customised-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--fwe-border);
+  text-align: left;
+  font-size: 13px;
+}
+.fwe-customised-table th { background: var(--fwe-gray-200); }
+.fwe-customised-table input, .fwe-customised-table select {
+  width: 100%; min-width: 72px; height: 36px;
+  border: 1px solid var(--fwe-control-border);
+  border-radius: var(--fwe-control-radius);
+  padding: 6px 8px; font: inherit;
+}
+.fwe-customised-table td:nth-child(2) { min-width: 240px; }
+.fwe-customised-field-count { width: 260px; }
+.fwe-customised-drag-handle {
+  width: 30px; height: 36px; border: 0; background: transparent;
+  color: var(--fwe-text-light); cursor: grab; font-size: 24px;
+}
+.fwe-customised-drag-handle:active { cursor: grabbing; }
+.fwe-customised-drag-handle:focus-visible { outline: 2px solid var(--fwe-hero); outline-offset: 2px; }
+.fwe-customised-dragging { opacity: 0.45; }
+.fwe-customised-drop-before td { box-shadow: inset 0 3px var(--fwe-hero); }
+.fwe-customised-drop-after td { box-shadow: inset 0 -3px var(--fwe-hero); }
+.fwe-customised-width { display: flex; align-items: center; gap: 6px; }
+.fwe-customised-width input, .fwe-customised-width select { max-width: 85px; }
+.fwe-customised-row-actions { display: flex; gap: 4px; }
+.fwe-customised-row-actions button {
+  width: 30px; height: 32px; cursor: pointer;
+  border: 1px solid var(--fwe-control-border); background: var(--fwe-white);
+}
+.fwe-customised-row-actions button:disabled { opacity: 0.4; cursor: default; }
+.fwe-customised-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 18px 0; }
+.fwe-customised-topics { display: grid; gap: 16px; max-height: 330px; overflow-y: auto; padding: 0 4px 16px; }
+.fwe-customised-preview { margin: 20px 0; }
+.fwe-customised-preview summary { cursor: pointer; font-weight: 600; }
+.fwe-customised-preview pre { overflow: auto; max-height: 380px; background: var(--fwe-gray-200); padding: 16px; font-size: 13px; }
 .fwe-modbus-data-heading {
   flex-wrap: wrap;
   gap: 16px;
@@ -1519,9 +1577,49 @@ button:focus-visible {
 }
 .fwe-modbus-polling {
   margin-top: 32px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 20px 16px;
 }
 .fwe-modbus-polling .fwe-field {
   width: 200px;
+}
+.fwe-modbus-test-mode {
+  order: 2;
+  position: relative;
+  width: 48px;
+  height: 28px;
+  margin: 6px 0;
+  padding: 0;
+  border: 1px solid var(--fwe-border);
+  border-radius: 16px;
+  background: #697782;
+  cursor: pointer;
+}
+.fwe-modbus-test-mode::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+}
+.fwe-modbus-test-mode[aria-checked="true"] {
+  background: var(--fwe-hero);
+}
+.fwe-modbus-test-mode[aria-checked="true"]::after {
+  left: 23px;
+}
+.fwe-modbus-test-mode:focus-visible {
+  outline: 2px solid var(--fwe-hero);
+  outline-offset: 3px;
+}
+.fwe-modbus-test-mode:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .fwe-opcua-protocol-field {
   min-width: 100px;
@@ -1617,6 +1715,104 @@ button:focus-visible {
   margin: 0 0 16px;
   font-size: var(--fwe-heading-size);
   font-weight: 650;
+}
+.fwe-opcua-datablocks {
+  display: grid;
+  gap: 16px;
+  margin: 20px 0 12px;
+}
+.fwe-opcua-datablock {
+  padding: 18px;
+  border: 1px solid var(--fwe-border);
+  border-radius: var(--fwe-control-radius);
+  background: var(--fwe-white);
+}
+.fwe-opcua-datablock.is-active {
+  border-color: var(--fwe-hero);
+  box-shadow: 0 0 0 1px var(--fwe-hero);
+}
+.fwe-opcua-datablock.is-drop-target {
+  border-color: var(--fwe-hero);
+  background: #eef7fc;
+  box-shadow: 0 0 0 2px var(--fwe-hero);
+}
+.fwe-opcua-drop-hint {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--fwe-hero);
+  border-radius: 4px;
+  color: var(--fwe-hero);
+  text-align: center;
+}
+.fwe-opcua-datablock-heading,
+.fwe-opcua-datablock-selection > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.fwe-opcua-datablock-heading h3 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+.fwe-opcua-datablock-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 16px;
+}
+.fwe-opcua-text-button,
+.fwe-opcua-datablock-selection button {
+  border: 0;
+  padding: 5px 0;
+  color: var(--fwe-hero);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.fwe-opcua-datablock-selection {
+  margin-top: 16px;
+}
+.fwe-opcua-datablock-selection > div > div,
+.fwe-opcua-datablock-selection > div > span {
+  color: var(--fwe-text-light);
+}
+.fwe-opcua-datablock-selection ul {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.fwe-opcua-datablock-selection li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--fwe-background);
+}
+.fwe-opcua-datablock-selection li > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.fwe-opcua-datablock-selection code {
+  overflow-wrap: anywhere;
+  color: var(--fwe-text-light);
+  font-size: 12px;
+}
+.fwe-opcua-datablock-selection button:disabled {
+  color: var(--fwe-text-disabled);
+  cursor: default;
+}
+.fwe-opcua-add-datablock {
+  margin: 0 0 16px;
+}
+.fwe-opcua-browse-nodes-heading {
+  margin-top: 28px !important;
+  padding-top: 20px;
+  border-top: 1px solid var(--fwe-border);
 }
 .fwe-opcua-browse p {
   margin: 0 0 16px;
@@ -1777,6 +1973,13 @@ button:focus-visible {
   .fwe-opcua-node-row {
     grid-template-columns: 1fr;
   }
+  .fwe-opcua-datablock-fields {
+    grid-template-columns: 1fr;
+  }
+  .fwe-opcua-datablock-selection > div,
+  .fwe-opcua-datablock-heading {
+    align-items: flex-start;
+  }
   .fwe-details {
     padding: 24px;
   }
@@ -1788,3 +1991,119 @@ button:focus-visible {
     flex-wrap: wrap;
   }
 }
+
+/* Unified Modbus editor: scoped styles keep the other PLC forms unchanged. */
+.fwe-modbus-editor {
+  background: #f5f8fb;
+  border: 1px solid #e2e9ef;
+  border-radius: 14px;
+  padding: 28px;
+  gap: 24px;
+}
+.fwe-modbus-page-title { display: flex; align-items: center; justify-content: space-between; margin: 0 0 24px; }
+.fwe-modbus-page-title p { margin: 0 0 5px; color: #687e91; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; }
+.fwe-modbus-page-title h1 { margin: 0; color: #153b54; font-size: 28px; font-weight: 650; }
+.fwe-modbus-protocol-badge { padding: 7px 12px; color: #006eb6; background: #e5f2fb; border: 1px solid #cce4f5; border-radius: 20px; font-size: 12px; font-weight: 650; }
+.fwe-modbus-panel { padding: 24px; margin-bottom: 18px; background: white; border: 1px solid #e1e9ef; border-radius: 12px; box-shadow: 0 2px 5px #173b5510; }
+.fwe-modbus-section-title { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 24px; }
+.fwe-modbus-section-title > span { width: 32px; height: 32px; display: grid; place-items: center; flex-shrink: 0; color: #006eb6; background: #eaf4fb; border-radius: 9px; font-size: 12px; font-weight: 700; }
+.fwe-modbus-section-title h2 { margin: 1px 0 5px; color: #213e53; font-size: 18px; font-weight: 650; }
+.fwe-modbus-section-title p { margin: 0; color: #718393; font-size: 13px; line-height: 1.5; }
+.fwe-modbus-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px 18px; }
+.fwe-modbus-editor .fwe-field input, .fwe-modbus-editor .fwe-field select { background-color: #fff; border-color: #cfdae3; border-radius: 6px; }
+.fwe-modbus-editor input:focus, .fwe-modbus-editor select:focus { outline: 2px solid #a5d6f6; outline-offset: 1px; border-color: #0077c5; }
+.fwe-modbus-editor .fwe-field small { color: #718393; line-height: 1.5; font-size: 11px; }
+.fwe-modbus-layout-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 22px; }
+.fwe-modbus-layout-picker button { display: flex; flex-direction: column; gap: 5px; padding: 16px 18px; text-align: left; background: #fff; border: 1px solid #d9e3ea; border-radius: 8px; cursor: pointer; font: inherit; color: #354d5e; }
+.fwe-modbus-layout-picker button strong { font-size: 14px; }
+.fwe-modbus-layout-picker button span { color: #718393; font-size: 12px; }
+.fwe-modbus-layout-picker button.is-selected { border-color: #0077c5; background: #f0f8fe; box-shadow: inset 3px 0 #0077c5; }
+.fwe-modbus-layout-picker button.is-selected strong { color: #006eb6; }
+.fwe-modbus-layout-editor .fwe-customised-toolbar { justify-content: space-between; margin: 16px 0; }
+.fwe-modbus-layout-total { display: flex; flex-direction: column; gap: 4px; text-align: right; }
+.fwe-modbus-layout-total strong { color: #006eb6; font-size: 25px; font-weight: 650; }
+.fwe-modbus-layout-total span { color: #718393; font-size: 12px; }
+.fwe-modbus-layout-editor .fwe-customised-help { font-size: 12px; margin-bottom: 16px; color: #718393; }
+.fwe-modbus-editor .fwe-customised-table-scroll { border: 1px solid #e1e9ef; border-radius: 8px; }
+.fwe-modbus-editor .fwe-customised-table { min-width: 720px; }
+.fwe-modbus-editor .fwe-customised-table th { background: #f4f7fa; color: #667c8d; font-size: 11px; font-weight: 650; padding: 12px 8px; }
+.fwe-modbus-editor .fwe-customised-table td { padding: 9px 8px; }
+.fwe-modbus-editor .fwe-customised-table tbody tr:last-child td { border-bottom: 0; }
+.fwe-modbus-editor .fwe-customised-table tbody tr:hover { background: #f8fbfe; }
+.fwe-modbus-editor .fwe-customised-table input, .fwe-modbus-editor .fwe-customised-table select { border-color: #dce5ed; border-radius: 5px; background-color: #fff; }
+.fwe-modbus-editor .fwe-customised-table td:nth-child(2) { min-width: 220px; }
+.fwe-modbus-editor .fwe-customised-table td:first-child { width: 30px; }
+.fwe-modbus-editor .fwe-customised-drag-handle { color: #a1b3c1; width: 24px; }
+.fwe-modbus-editor .fwe-customised-width span { font-size: 11px; color: #718393; }
+.fwe-modbus-register-badge { display: inline-block; min-width: 28px; padding: 3px 6px; text-align: center; border-radius: 4px; background: #eaf4fb; color: #006eb6; font-size: 12px; }
+.fwe-modbus-offset { color: #718393; font-variant-numeric: tabular-nums; }
+.fwe-modbus-editor .fwe-customised-row-actions button { border: none; border-radius: 4px; color: #8b9ba8; background: transparent; font-size: 20px; }
+.fwe-modbus-editor .fwe-customised-row-actions button:hover:enabled { background: #fcecec; color: #b53838; }
+.fwe-modbus-address-settings { border-top: 1px solid #e7edf2; padding-top: 22px; margin-top: 22px; }
+.fwe-modbus-range-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 18px; padding: 12px 14px; border-radius: 6px; background: #f2f7fa; color: #597386; font-size: 12px; }
+.fwe-modbus-range-summary strong { color: #244f69; font-weight: 600; }
+.fwe-modbus-notes { margin-top: 14px; font-size: 12px; color: #718393; line-height: 1.7; }
+.fwe-modbus-notes summary, .fwe-modbus-standard-layout summary { cursor: pointer; }
+.fwe-modbus-standard-layout { font-size: 13px; color: #587387; }
+.fwe-modbus-standard-layout summary { padding: 10px 0; }
+.fwe-modbus-standard-table { width: 100%; border-collapse: collapse; text-align: left; }
+.fwe-modbus-standard-table td, .fwe-modbus-standard-table th { padding: 10px 12px; border-bottom: 1px solid #e7edf2; font-size: 12px; }
+.fwe-modbus-delivery-settings { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; padding-bottom: 22px; border-bottom: 1px solid #e7edf2; }
+.fwe-modbus-delivery-settings > .fwe-field { width: 220px; }
+.fwe-modbus-publish-switch { display: flex; align-items: center; gap: 10px; color: #354d5e; font-size: 13px; }
+.fwe-modbus-publish-switch input { width: 17px; height: 17px; accent-color: #0077c5; }
+.fwe-modbus-publish-switch small { display: block; color: #718393; font-size: 11px; margin-top: 4px; }
+.fwe-modbus-topic-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
+.fwe-modbus-topic-heading h3 { margin: 0; color: #354d5e; font-size: 13px; font-weight: 600; }
+.fwe-modbus-topic-list { max-height: 360px; overflow: auto; border: 1px solid #e1e9ef; border-radius: 8px; }
+.fwe-modbus-topic-row { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 18px; padding: 14px 16px; align-items: center; border-bottom: 1px solid #edf1f5; }
+.fwe-modbus-topic-row:last-child { border-bottom: 0; }
+.fwe-modbus-topic-row > div span { display: block; color: #48718a; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+.fwe-modbus-topic-row > div small { display: block; color: #91a1ae; font-size: 11px; margin-top: 5px; }
+.fwe-modbus-topic-row .fwe-field > span:first-child { font-size: 11px; margin-bottom: 5px; color: #718393; }
+.fwe-modbus-topic-value { color: #718393; font-size: 13px; }
+.fwe-modbus-topic-value code { margin-left: 8px; color: #006eb6; }
+.fwe-modbus-json-preview { margin-top: 22px; border: 1px solid #dce7ef; border-radius: 8px; overflow: hidden; background: #f7fafc; }
+.fwe-modbus-preview-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #e1e9ef; }
+.fwe-modbus-preview-heading h3 { margin: 0; color: #354d5e; font-size: 13px; font-weight: 600; }
+.fwe-modbus-preview-heading span { color: #6f8a9e; font-size: 10px; font-weight: 650; letter-spacing: 1px; }
+.fwe-modbus-json-preview pre { margin: 0; padding: 18px; overflow: auto; max-height: 320px; color: #255775; font: 12px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.fwe-modbus-json-preview p { margin: 0; padding: 10px 16px; border-top: 1px solid #e1e9ef; color: #718393; font-size: 11px; }
+.fwe-modbus-json-preview > select { width: calc(100% - 32px); margin: 12px 16px 0; padding: 8px; border: 1px solid #cfdae3; border-radius: 4px; background: #fff; }
+.fwe-modbus-test-panel { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 0 12px; }
+.fwe-modbus-test-panel p { margin: 0; color: #718393; font-size: 12px; }
+.fwe-modbus-test-panel > div { flex-basis: 100%; font-size: 13px; }
+.fwe-modbus-editor .fwe-siemens-actions { position: sticky; top: 24px; align-self: start; }
+@media (max-width: 1100px) {
+  .fwe-modbus-settings-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .fwe-modbus-editor { padding: 18px; gap: 18px; }
+  .fwe-modbus-panel { padding: 18px; }
+}
+@media (max-width: 700px) {
+  .fwe-modbus-editor { grid-template-columns: minmax(0,1fr); padding: 14px; }
+  .fwe-modbus-settings-grid, .fwe-modbus-layout-picker { grid-template-columns: minmax(0,1fr); }
+  .fwe-modbus-editor .fwe-siemens-actions { position: static; }
+  .fwe-modbus-topic-row { grid-template-columns: 65px minmax(0,1fr); gap: 12px; padding: 12px; }
+}
+
+.fwe-modbus-editor .fwe-test-row { margin-top: 24px; margin-bottom: 0; }
+.fwe-modbus-mqtt-output { padding: 24px; background: var(--fwe-white); }
+.fwe-modbus-editor .fwe-modbus-mqtt-output .fwe-field input,
+.fwe-modbus-editor .fwe-modbus-mqtt-output .fwe-field select {
+  border-color: var(--fwe-control-border);
+  border-radius: var(--fwe-control-radius);
+}
+.fwe-modbus-mqtt-output .fwe-customised-preview > select {
+  margin-top: 12px;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--fwe-control-border);
+  border-radius: var(--fwe-control-radius);
+}
+@media (max-width: 700px) {
+  .fwe-modbus-mqtt-output { padding: 18px; }
+}
+
+.fwe-modbus-mqtt-settings { margin-bottom: 24px; }
+.fwe-modbus-layout-heading { align-items: center; flex-wrap: wrap; }
+.fwe-modbus-layout-heading h2 { margin: 0; }

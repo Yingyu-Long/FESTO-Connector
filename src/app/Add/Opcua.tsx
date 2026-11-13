@@ -1,15 +1,18 @@
 import { useState } from "react";
+import type { DragEvent } from "react";
 import { Button, LoadingIndicator } from "@festo-ui/react";
 import {
   IconCheckStatus,
   IconConnected,
   IconFailure,
+  IconPlus,
 } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, readMqttConfig, saveConnection } from "../storage";
 import type { SavedConnection } from "../storage";
 import { connectPlc, saveCurrentConfiguration } from "../configurationApi";
+import { isValidMqttPublishTopic } from "../../../shared/mqttTopic.js";
 
 type BrowsedNode = {
   nodeId: string;
@@ -24,24 +27,74 @@ type SelectedNode = {
   displayName: string;
 };
 
-function savedSelectedNodes(connection?: SavedConnection): SelectedNode[] {
-  const selectedNodes = connection?.config?.selectedNodes;
-  if (!Array.isArray(selectedNodes)) return [];
+type OpcuaDataBlock = {
+  key: string;
+  name: string;
+  mqttTopic: string;
+  nodes: SelectedNode[];
+};
 
-  return selectedNodes.flatMap((node) => {
+function readNodes(value: unknown, nodeIdsValue?: unknown): SelectedNode[] {
+  const nodes = Array.isArray(value) ? value : [];
+  const parsed = nodes.flatMap((node) => {
     if (typeof node !== "object" || node === null) return [];
-    const value = node as Record<string, unknown>;
-    if (typeof value.nodeId !== "string") return [];
-    return [
-      {
-        nodeId: value.nodeId,
-        displayName:
-          typeof value.displayName === "string"
-            ? value.displayName
-            : value.nodeId,
-      },
-    ];
+    const item = node as Record<string, unknown>;
+    if (typeof item.nodeId !== "string") return [];
+    return [{
+      nodeId: item.nodeId,
+      displayName: typeof item.displayName === "string" ? item.displayName : item.nodeId,
+    }];
   });
+  if (parsed.length > 0) return parsed;
+  return Array.isArray(nodeIdsValue)
+    ? nodeIdsValue.flatMap((nodeId) => typeof nodeId === "string" ? [{ nodeId, displayName: nodeId }] : [])
+    : [];
+}
+
+function savedOpcuaDataBlocks(connection?: SavedConnection): OpcuaDataBlock[] {
+  const config = connection?.config ?? {};
+  const savedBlocks = config.dataBlocks;
+  if (Array.isArray(savedBlocks) && savedBlocks.length > 0) {
+    return savedBlocks.flatMap((raw, index) => {
+      if (typeof raw !== "object" || raw === null) return [];
+      const block = raw as Record<string, unknown>;
+      const nodes = readNodes(block.nodes ?? block.selectedNodes, block.nodeIds);
+      return [{
+        key: typeof block.id === "string" ? block.id : crypto.randomUUID(),
+        name: typeof block.name === "string" && block.name.trim() ? block.name : `Datablock ${index + 1}`,
+        mqttTopic: typeof block.mqttTopic === "string" && block.mqttTopic.trim()
+          ? block.mqttTopic
+          : index === 0 && typeof config.mqttTopic === "string"
+            ? config.mqttTopic
+            : "",
+        nodes,
+      }];
+    });
+  }
+
+  const nodes = readNodes(config.selectedNodes, config.nodeIds);
+  return [{
+    key: crypto.randomUUID(),
+    name: "Datablock 1",
+    mqttTopic: typeof config.mqttTopic === "string" ? config.mqttTopic : "",
+    nodes,
+  }];
+}
+
+function newDataBlock(index: number): OpcuaDataBlock {
+  return {
+    key: crypto.randomUUID(),
+    name: `Datablock ${index + 1}`,
+    mqttTopic: "",
+    nodes: [],
+  };
+}
+
+function effectiveTopic(block: OpcuaDataBlock, index: number, plcId: string) {
+  const configured = block.mqttTopic.trim();
+  if (configured) return configured;
+  const base = `festo/plc/${plcId.trim() || "{PLC ID}"}`;
+  return index === 0 ? base : `${base}/datablock-${index + 1}`;
 }
 
 type CertificateFieldProps = {
@@ -115,23 +168,16 @@ export default function Opcua() {
   const [connectionError, setConnectionError] = useState("");
   const [testing, setTesting] = useState(false);
   const [browseNodes, setBrowseNodes] = useState<BrowsedNode[]>([]);
+  const [dropTargetBlockKey, setDropTargetBlockKey] = useState("");
   const [browsePath, setBrowsePath] = useState([
     { nodeId: "RootFolder", label: "Root" },
   ]);
   const [browsing, setBrowsing] = useState(false);
-  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(() => {
-    const saved = editConnection?.config?.nodeIds;
-    return Array.isArray(saved)
-      ? saved.filter((nodeId): nodeId is string => typeof nodeId === "string")
-      : [];
-  });
-  const [selectedNodeNames, setSelectedNodeNames] = useState(() =>
-    Object.fromEntries(
-      savedSelectedNodes(editConnection).map((node) => [
-        node.nodeId,
-        node.displayName,
-      ]),
-    ),
+  const [dataBlocks, setDataBlocks] = useState<OpcuaDataBlock[]>(() =>
+    savedOpcuaDataBlocks(editConnection),
+  );
+  const [activeBlockKey, setActiveBlockKey] = useState(
+    () => dataBlocks[0]?.key ?? "",
   );
   const [polling, setPolling] = useState(
     configString(editConnection, "polling", "500"),
@@ -148,6 +194,16 @@ export default function Opcua() {
       Boolean(certificates.rootCertificate) &&
       Boolean(certificates.clientCertificate) &&
       Boolean(certificates.clientKey));
+  const topicValid =
+    dataBlocks.length > 0 &&
+    dataBlocks.every((block, index) =>
+      Boolean(block.name.trim()) && isValidMqttPublishTopic(effectiveTopic(block, index, values.id)),
+    ) &&
+    new Set(dataBlocks.map((block, index) => effectiveTopic(block, index, values.id))).size ===
+      dataBlocks.length;
+  const allSelectedNodes = dataBlocks.flatMap((block) => block.nodes);
+  const selectedNodeIds = allSelectedNodes.map((node) => node.nodeId);
+  const activeBlock = dataBlocks.find((block) => block.key === activeBlockKey);
   const updateSecurityMode = (value: string) => {
     setSecurityMode(value);
     if (value === "NONE_MODE") setSecurityPolicy("NONE");
@@ -156,11 +212,23 @@ export default function Opcua() {
     values.id &&
     values.host &&
     values.port &&
+    topicValid &&
     certificatesValid &&
     (authType === "None" || (values.username && values.password)),
   );
   const subscriptionValid =
-    valid && selectedNodeIds.length > 0 && Boolean(polling);
+    valid &&
+    dataBlocks.every((block) => block.nodes.length > 0) &&
+    selectedNodeIds.length > 0 &&
+    Boolean(polling);
+  const updateDataBlock = (
+    key: string,
+    updates: Partial<Pick<OpcuaDataBlock, "name" | "mqttTopic">>,
+  ) => {
+    setDataBlocks((current) =>
+      current.map((block) => block.key === key ? { ...block, ...updates } : block),
+    );
+  };
   const buildBackendConfig = () => {
     return {
       id: values.id,
@@ -173,8 +241,14 @@ export default function Opcua() {
       authType,
       polling: Number(polling),
       nodeIds: selectedNodeIds,
+      dataBlocks: dataBlocks.map((block, index) => ({
+        id: block.key,
+        name: block.name.trim(),
+        mqttTopic: effectiveTopic(block, index, values.id),
+        nodes: block.nodes,
+        nodeIds: block.nodes.map((node) => node.nodeId),
+      })),
       mqtt: readMqttConfig(),
-      mqttTopic: `festo/plc/${values.id}`,
     };
   };
   const testConnection = async () => {
@@ -238,18 +312,42 @@ export default function Opcua() {
     }
   };
   const toggleNode = (nodeId: string, displayName: string) => {
-    const selected = selectedNodeIds.includes(nodeId);
-    setSelectedNodeIds((current) =>
-      selected
-        ? current.filter((item) => item !== nodeId)
-        : [...current, nodeId],
-    );
-    setSelectedNodeNames((names) => {
-      const nextNames = { ...names };
-      if (selected) delete nextNames[nodeId];
-      else nextNames[nodeId] = displayName;
-      return nextNames;
-    });
+    if (!activeBlockKey) return;
+    const alreadyInActive = activeBlock?.nodes.some((node) => node.nodeId === nodeId);
+    if (!alreadyInActive) {
+      assignNodeToBlock(nodeId, displayName, activeBlockKey);
+      return;
+    }
+    setDataBlocks((current) => current.map((block) => {
+      return block.key === activeBlockKey
+        ? { ...block, nodes: block.nodes.filter((node) => node.nodeId !== nodeId) }
+        : block;
+    }));
+  };
+  const assignNodeToBlock = (nodeId: string, displayName: string, targetKey: string) => {
+    setDataBlocks((current) => current.map((block) => {
+      const withoutNode = block.nodes.filter((node) => node.nodeId !== nodeId);
+      return block.key === targetKey
+        ? { ...block, nodes: [...withoutNode, { nodeId, displayName }] }
+        : { ...block, nodes: withoutNode };
+    }));
+  };
+  const dropNodeOnBlock = (event: DragEvent<HTMLElement>, targetKey: string) => {
+    event.preventDefault();
+    const rawNode = event.dataTransfer.getData("application/json") || event.dataTransfer.getData("text/plain");
+    setDropTargetBlockKey("");
+    if (!rawNode) return;
+    try {
+      const node = JSON.parse(rawNode) as { nodeId?: unknown; displayName?: unknown };
+      if (typeof node.nodeId !== "string" || !node.nodeId) return;
+      assignNodeToBlock(
+        node.nodeId,
+        typeof node.displayName === "string" ? node.displayName : node.nodeId,
+        targetKey,
+      );
+    } catch {
+      return;
+    }
   };
   const connectToBackend = async () => {
     const result = await connectPlc(
@@ -279,10 +377,15 @@ export default function Opcua() {
         securityMode,
         securityPolicy,
         authType,
+        mqttTopic: dataBlocks[0]?.mqttTopic.trim() ?? "",
         nodeIds: selectedNodeIds,
-        selectedNodes: selectedNodeIds.map((nodeId) => ({
-          nodeId,
-          displayName: selectedNodeNames[nodeId] ?? nodeId,
+        selectedNodes: allSelectedNodes,
+        dataBlocks: dataBlocks.map((block) => ({
+          id: block.key,
+          name: block.name.trim(),
+          mqttTopic: block.mqttTopic.trim(),
+          nodes: block.nodes,
+          nodeIds: block.nodes.map((node) => node.nodeId),
         })),
         polling,
       },
@@ -305,7 +408,6 @@ export default function Opcua() {
               value={values.id}
               onChange={set("id")}
               invalid={submitted && !values.id}
-              help="Please type in an Id for this PLC"
             />
             <div className="fwe-opcua-connection-fields">
               <SelectField
@@ -466,7 +568,116 @@ export default function Opcua() {
               className="fwe-opcua-browse"
               aria-labelledby="opcua-browse-heading"
             >
-              <h2 id="opcua-browse-heading">Browse Nodes</h2>
+              <h2 id="opcua-browse-heading">Group variables into Datablocks</h2>
+              <div className="fwe-opcua-datablocks">
+                {dataBlocks.map((block, index) => (
+                  <article
+                    className={`fwe-opcua-datablock ${activeBlockKey === block.key ? "is-active" : ""} ${dropTargetBlockKey === block.key ? "is-drop-target" : ""}`}
+                    key={block.key}
+                    onDragOver={(event) => {
+                      if (!event.dataTransfer.types.includes("text/plain") && !event.dataTransfer.types.includes("application/json")) return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      setDropTargetBlockKey(block.key);
+                    }}
+                    onDragLeave={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                        setDropTargetBlockKey("");
+                      }
+                    }}
+                    onDrop={(event) => dropNodeOnBlock(event, block.key)}
+                  >
+                    <div className="fwe-opcua-datablock-heading">
+                      <h3>Datablock {index + 1}</h3>
+                      {dataBlocks.length > 1 && (
+                        <button
+                          type="button"
+                          className="fwe-opcua-text-button"
+                          onClick={() => {
+                            const remaining = dataBlocks.filter((item) => item.key !== block.key);
+                            setDataBlocks(remaining);
+                            if (activeBlockKey === block.key) setActiveBlockKey(remaining[0].key);
+                          }}
+                        >
+                          Remove group
+                        </button>
+                      )}
+                    </div>
+                    <div className="fwe-opcua-datablock-fields">
+                      <Field
+                        label="Group name"
+                        value={block.name}
+                        onChange={(name) => updateDataBlock(block.key, { name })}
+                        invalid={submitted && !block.name.trim()}
+                      />
+                      <Field
+                        label="MQTT topic"
+                        value={block.mqttTopic}
+                        onChange={(mqttTopic) => updateDataBlock(block.key, { mqttTopic })}
+                        required={false}
+                        placeholder={effectiveTopic(block, index, values.id)}
+                      />
+                    </div>
+                    {submitted &&
+                      (!isValidMqttPublishTopic(effectiveTopic(block, index, values.id)) ||
+                        dataBlocks.some((other, otherIndex) => other.key !== block.key && effectiveTopic(other, otherIndex, values.id) === effectiveTopic(block, index, values.id))) && (
+                        <p className="fwe-connection-error" role="alert">
+                          Enter a valid, unique publish topic. Topics cannot contain + or # and must fit within 65535 UTF-8 bytes.
+                        </p>
+                      )}
+                    <div className="fwe-opcua-datablock-selection">
+                      <div>
+                        <strong>{block.nodes.length} variables</strong>
+                        {activeBlockKey !== block.key && (
+                          <button type="button" onClick={() => setActiveBlockKey(block.key)}>
+                            Choose variables for this group
+                          </button>
+                        )}
+                      </div>
+                      {dropTargetBlockKey === block.key && (
+                        <div className="fwe-opcua-drop-hint">Drop variable into this Datablock</div>
+                      )}
+                      {block.nodes.length > 0 ? (
+                        <ul>
+                          {block.nodes.map((node) => (
+                            <li key={node.nodeId}>
+                              <span>{node.displayName}<code>{node.nodeId}</code></span>
+                              <button
+                                type="button"
+                                aria-label={`Remove ${node.displayName} from ${block.name}`}
+                                onClick={() => toggleNode(node.nodeId, node.displayName)}
+                                disabled={activeBlockKey !== block.key}
+                              >
+                                Remove
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : submitted ? (
+                        <p className="fwe-connection-error" role="alert">Add at least one variable to this Datablock.</p>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="fwe-add-more fwe-opcua-add-datablock"
+                onClick={() => {
+                  const next = newDataBlock(dataBlocks.length);
+                  setDataBlocks((current) => [...current, next]);
+                  setActiveBlockKey(next.key);
+                }}
+              >
+                <IconPlus /> Add Datablock
+              </button>
+              {!topicValid && submitted && (
+                <p className="fwe-connection-error" role="alert">
+                  Give every Datablock a valid, unique MQTT topic.
+                </p>
+              )}
+
+              <h2 className="fwe-opcua-browse-nodes-heading">Choose OPC UA variables</h2>
               {tested && !valid && (
                 <div className="fwe-opcua-error-ribbon" role="alert">
                   <IconFailure />
@@ -479,7 +690,6 @@ export default function Opcua() {
                   {connectionError}
                 </div>
               )}
-              <p>You can browse nodes after a successful connection test.</p>
               <Button
                 type="button"
                 disabled={connectionStatus !== "connected" || browsing}
@@ -503,11 +713,27 @@ export default function Opcua() {
                         <label>
                           <input
                             type="checkbox"
-                            checked={selectedNodeIds.includes(node.nodeId)}
+                            checked={Boolean(activeBlock?.nodes.some((selected) => selected.nodeId === node.nodeId))}
                             onChange={() =>
                               toggleNode(node.nodeId, node.displayName)
                             }
+                            disabled={!activeBlock}
                           />
+                          <span
+                            className="fwe-opcua-drag-handle"
+                            aria-hidden="true"
+                            title="Drag variable to a Datablock"
+                            draggable
+                            onDragStart={(event) => {
+                              const selected = { nodeId: node.nodeId, displayName: node.displayName };
+                              const payload = JSON.stringify(selected);
+                              event.dataTransfer.setData("application/json", payload);
+                              event.dataTransfer.setData("text/plain", payload);
+                              event.dataTransfer.effectAllowed = "move";
+                            }}
+                          >
+                            ⠿
+                          </span>
                           <span>{node.displayName}</span>
                         </label>
                       ) : (
@@ -515,6 +741,9 @@ export default function Opcua() {
                       )}
                       <small>
                         {node.nodeClass} - {node.nodeId}
+                        {dataBlocks.some((block) => block.key !== activeBlockKey && block.nodes.some((selected) => selected.nodeId === node.nodeId))
+                          ? ` · In ${dataBlocks.find((block) => block.key !== activeBlockKey && block.nodes.some((selected) => selected.nodeId === node.nodeId))?.name ?? "another group"}`
+                          : ""}
                       </small>
                       <button
                         type="button"
@@ -537,10 +766,10 @@ export default function Opcua() {
                   suffix="ms"
                 />
                 <p>
-                  Selected variables: {selectedNodeIds.length}
+                  Total variables selected: {selectedNodeIds.length}
                   {submitted &&
                     selectedNodeIds.length === 0 &&
-                    " (select at least one NodeId)"}
+                    " (add at least one variable)"}
                 </p>
               </div>
             </section>

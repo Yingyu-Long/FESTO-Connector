@@ -8,6 +8,7 @@ import type { SavedConnection } from "../storage";
 import { buildConfiguration } from "../configuration";
 import { prepareConfiguration } from "../configurationImport";
 import { MODBUS_DATABLOCK_DEFAULT_START_ADDRESS } from "../../../shared/modbusDatablock.js";
+import { CUSTOMISED_ENDPOINT, CUSTOMISED_PROTOCOL } from "../../../shared/modbusCustomised.js";
 
 type MqttSummary = {
   clientId: string;
@@ -105,10 +106,39 @@ export async function reconnect(connection: SavedConnection): Promise<RescanResu
       dataBlocks,
       messageLayout: String(config.messageLayout ?? "mip"),
       mqtt: readMqttConfig(),
-      mqttTopic: `festo-ax/pni/${connection.id}`,
+      mqttTopic: typeof config.mqttTopic === "string" ? config.mqttTopic.trim() : "",
     };
   } else if (connection.protocol === "opc.tcp") {
     endpoint = "/api/plcs/opcua/connect";
+    const configuredBlocks = Array.isArray(config.dataBlocks)
+      ? config.dataBlocks.flatMap((raw) => {
+          if (typeof raw !== "object" || raw === null) return [];
+          const block = raw as Record<string, unknown>;
+          const rawNodes = Array.isArray(block.nodes) && block.nodes.length > 0
+            ? block.nodes
+            : Array.isArray(block.selectedNodes) && block.selectedNodes.length > 0
+              ? block.selectedNodes
+              : Array.isArray(block.nodeIds)
+                ? block.nodeIds.map((nodeId) => ({ nodeId }))
+                : [];
+          const nodes = rawNodes.flatMap((node) => {
+            if (typeof node === "string") return [{ nodeId: node, displayName: node }];
+            if (typeof node !== "object" || node === null) return [];
+            const value = node as Record<string, unknown>;
+            if (typeof value.nodeId !== "string") return [];
+            return [{
+              nodeId: value.nodeId,
+              displayName: typeof value.displayName === "string" ? value.displayName : value.nodeId,
+            }];
+          });
+          return [{
+            name: typeof block.name === "string" ? block.name : "",
+            mqttTopic: typeof block.mqttTopic === "string" ? block.mqttTopic : "",
+            nodes,
+            nodeIds: nodes.map((node) => node.nodeId),
+          }];
+        })
+      : [];
     body = {
       id: connection.id,
       host: connection.host,
@@ -118,9 +148,22 @@ export async function reconnect(connection: SavedConnection): Promise<RescanResu
       securityPolicy: String(config.securityPolicy ?? "NONE"),
       authType: String(config.authType ?? "None"),
       polling: Number(config.polling ?? 500),
-      nodeIds: Array.isArray(config.nodeIds) ? config.nodeIds : [],
+      nodeIds: Array.isArray(config.nodeIds) ? config.nodeIds : configuredBlocks.flatMap((block) => block.nodeIds),
+      ...(configuredBlocks.length > 0 ? { dataBlocks: configuredBlocks } : {}),
       mqtt: readMqttConfig(),
-      mqttTopic: `festo/plc/${connection.id}`,
+      mqttTopic:
+        typeof config.mqttTopic === "string" && config.mqttTopic.trim()
+          ? config.mqttTopic.trim()
+          : `festo/plc/${connection.id}`,
+    };
+  } else if (connection.protocol === CUSTOMISED_PROTOCOL) {
+    endpoint = `${CUSTOMISED_ENDPOINT}/connect`;
+    body = {
+      ...config,
+      id: connection.id,
+      host: connection.host,
+      port: Number(connection.port),
+      mqtt: readMqttConfig(),
     };
   } else if (connection.protocol === "modbus.tcp") {
     const byDatablocks = config.readMode === "Read by Datablocks";
@@ -135,6 +178,10 @@ export async function reconnect(connection: SavedConnection): Promise<RescanResu
       readMode: byDatablocks ? "Read by Datablocks" : "Read by registers",
       ...(byDatablocks
         ? {
+            layoutMode: config.layoutMode ?? "standard",
+            fields: config.fields,
+            endian: config.endian ?? "Big-Endian",
+            testMode: config.testMode === true,
             startAddress:
               config.startAddress === undefined
                 ? MODBUS_DATABLOCK_DEFAULT_START_ADDRESS

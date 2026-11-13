@@ -1,6 +1,4 @@
-import { MODBUS_DATABLOCK_REGISTER_COUNT } from "../../../shared/modbusDatablock.js";
-
-const maximumBlockCount = Math.floor(65536 / MODBUS_DATABLOCK_REGISTER_COUNT);
+import { MODBUS_DATABLOCK_REGISTER_COUNT, MODBUS_MAX_READ_REGISTERS } from "../../../shared/modbusDatablock.js";
 
 type ImportedDatablocks = {
   startAddress: number;
@@ -30,7 +28,11 @@ function isEmpty(value: unknown) {
   return value == null || (typeof value === "string" && value.trim() === "");
 }
 
-function parseDatablockRows(rows: unknown[][]): ImportedDatablocks {
+export function parseDatablockRows(rows: unknown[][], registersPerBlock: number = MODBUS_DATABLOCK_REGISTER_COUNT): ImportedDatablocks {
+  if (!Number.isInteger(registersPerBlock) || registersPerBlock < 1 || registersPerBlock > MODBUS_MAX_READ_REGISTERS) {
+    throw new Error("Configure a valid datablock layout before importing MQTT topics.");
+  }
+  const maximumBlockCount = Math.floor(65536 / registersPerBlock);
   for (const [row, column, label, cell] of [
     [0, 0, "Start address", "A1"],
     [1, 0, "Polling interval (ms)", "A2"],
@@ -46,7 +48,7 @@ function parseDatablockRows(rows: unknown[][]): ImportedDatablocks {
     rows[0]?.[1],
     "B1",
     0,
-    65536 - MODBUS_DATABLOCK_REGISTER_COUNT,
+    65536 - registersPerBlock,
   );
   const polling = integerCell(rows[1]?.[1], "B2", 10, 3600000);
   let declaredBlockCount: number | undefined;
@@ -99,7 +101,7 @@ function parseDatablockRows(rows: unknown[][]): ImportedDatablocks {
     return topic;
   });
   const endAddress =
-    startAddress + blockTopics.length * MODBUS_DATABLOCK_REGISTER_COUNT - 1;
+    startAddress + blockTopics.length * registersPerBlock - 1;
   if (endAddress > 65535) {
     throw new Error(
       `These ${blockTopics.length} FBs end at register ${endAddress}. The last register must not exceed 65535.`,
@@ -108,7 +110,7 @@ function parseDatablockRows(rows: unknown[][]): ImportedDatablocks {
   return { startAddress, polling, blockTopics };
 }
 
-export async function importDatablocks(file: File): Promise<ImportedDatablocks> {
+export async function importDatablocks(file: File, registersPerBlock: number = MODBUS_DATABLOCK_REGISTER_COUNT): Promise<ImportedDatablocks> {
   if (!/\.xlsx$/i.test(file.name)) {
     throw new Error(
       "Choose an Excel .xlsx file. Save legacy .xls files as .xlsx first.",
@@ -133,5 +135,5 @@ export async function importDatablocks(file: File): Promise<ImportedDatablocks> 
       { cause: error },
     );
   }
-  return parseDatablockRows(rows);
+  return parseDatablockRows(rows, registersPerBlock);
 }

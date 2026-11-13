@@ -1,3 +1,4 @@
+export const MODBUS_MAX_READ_REGISTERS = 125;
 export const MODBUS_DATABLOCK_REGISTER_COUNT = 58;
 export const MODBUS_DATABLOCK_DEFAULT_START_ADDRESS = 0;
 
@@ -52,13 +53,13 @@ export const MODBUS_DATABLOCK_FIELDS = Object.freeze(
       registerCount: 4,
     },
     {
-      name: "udiCycleCounter",
+      name: "cycle_counter",
       dataType: "UDINT",
       offset: 32,
       registerCount: 2,
     },
     {
-      name: "sPartnumber",
+      name: "part_number",
       dataType: "STRING[48]",
       offset: 34,
       registerCount: 24,

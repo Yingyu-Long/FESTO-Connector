@@ -1,35 +1,34 @@
+import { acquireModbusConnection } from "./modbusConnectionPool.js";
 import { publishPayload } from "../mqttPublisher.js";
+import { createModbusDatablockPublisher } from "./modbusDatablockPublisher.js";
 import {
-  connectModbus,
-  disconnectModbus,
   modbusErrorMessage,
   normalizeModbusConfig,
   readModbusDatablocks,
   readModbusRegisters,
   readModbusSample,
-  testModbusConnection,
 } from "./modbusClient.js";
 
 const activePollers = new Map();
 const pollingStatuses = new Map();
 
 function sameConnection(first, second) {
-  return ["host", "port", "unitId", "timeout"].every(
-    (key) => first[key] === second[key],
-  );
+  return first.host.toLowerCase() === second.host.toLowerCase() && first.port === second.port;
 }
 
-function setPollingStatus(plcId, status) {
-  pollingStatuses.set(String(plcId), {
+function pollerKey(plcId, namespace) { return JSON.stringify([namespace, String(plcId)]); }
+
+function setPollingStatus(plcId, status, namespace = "modbus") {
+  pollingStatuses.set(pollerKey(plcId, namespace), {
     plcId: String(plcId),
     updatedAt: Date.now(),
     ...status,
   });
 }
 
-export function getModbusPollerStatus(plcId) {
+export function getModbusPollerStatus(plcId, namespace = "modbus") {
   return (
-    pollingStatuses.get(String(plcId)) ?? {
+    pollingStatuses.get(pollerKey(plcId, namespace)) ?? {
       plcId: String(plcId),
       updatedAt: null,
       pollingStatus: "NOT_CONNECTED",
@@ -39,59 +38,49 @@ export function getModbusPollerStatus(plcId) {
   );
 }
 
-export async function stopModbusPoller(plcId) {
-  const key = String(plcId);
+export async function stopModbusPoller(plcId, namespace = "modbus") {
+  const key = pollerKey(plcId, namespace);
   const poller = activePollers.get(key);
   if (!poller) return;
 
   await poller.stop();
   if (activePollers.get(key) !== poller) return;
   activePollers.delete(key);
-  setPollingStatus(key, {
+  setPollingStatus(plcId, {
     pollingStatus: "NOT_CONNECTED",
-    registers: getModbusPollerStatus(key).registers,
-    dataBlocks: getModbusPollerStatus(key).dataBlocks,
-  });
+    registers: getModbusPollerStatus(plcId, namespace).registers,
+    dataBlocks: getModbusPollerStatus(plcId, namespace).dataBlocks,
+  }, namespace);
 }
 
 export async function testModbusPollerConnection(rawConfig) {
   const config = normalizeModbusConfig(rawConfig);
-  const poller = [...activePollers.values()].find((candidate) =>
-    sameConnection(candidate.config, config),
-  );
-
-  // A PLC may accept only one TCP client. Test with a fresh read on the
-  // existing connection, using the edited register configuration.
-  return poller ? poller.test(config) : testModbusConnection(config);
+  const connection = acquireModbusConnection(config);
+  try {
+    return await connection.run(config, (client) => readModbusSample(client, config));
+  } finally {
+    await connection.release();
+  }
 }
 
-export async function startModbusPoller(rawConfig) {
-  let config;
-  try {
-    config = normalizeModbusConfig(rawConfig);
-  } catch (error) {
-    if (rawConfig?.id) {
-      await stopModbusPoller(rawConfig.id);
-      setPollingStatus(rawConfig.id, {
-        pollingStatus: "UNHEALTHY",
-        registers: [],
-        dataBlocks: [],
-        error: modbusErrorMessage(error),
-      });
-    }
-    throw error;
-  }
-  const existing = activePollers.get(config.id);
+export async function startModbusPoller(rawConfig, namespace = "modbus") {
+  // Validate before touching any running acquisition.
+  let config = normalizeModbusConfig(rawConfig);
+  const key = pollerKey(config.id, namespace);
+  const getStatus = () => getModbusPollerStatus(config.id, namespace);
+  const setStatus = (status) => setPollingStatus(config.id, status, namespace);
+  const existing = activePollers.get(key);
   if (existing && sameConnection(existing.config, config)) {
     return existing.update(config);
   }
-  await stopModbusPoller(config.id);
+  await stopModbusPoller(config.id, namespace);
 
-  let client;
+  const connection = acquireModbusConnection(config);
   let timer;
   let stopped = false;
   let operationQueue = Promise.resolve();
   let stopPromise;
+  let publishDatablocks = createModbusDatablockPublisher(publishPayload);
 
   const runExclusive = (operation) => {
     const result = operationQueue.then(() => {
@@ -105,33 +94,20 @@ export async function startModbusPoller(rawConfig) {
     return result;
   };
 
-  const closeClient = async () => {
-    const currentClient = client;
-    client = undefined;
-    await disconnectModbus(currentClient);
-  };
-
-  const connectIfNeeded = async () => {
-    if (client?.isOpen) return;
-    const connection = await connectModbus(config);
-    client = connection.client;
-  };
-
   const readAndPublish = async () => {
-    await connectIfNeeded();
     if (config.readMode === "Read by Datablocks") {
-      const dataBlocks = await readModbusDatablocks(client, config);
+      const dataBlocks = await connection.run(config, (client) => readModbusDatablocks(client, config));
       let published = true;
-      for (const block of dataBlocks) {
-        const blockPublished = await publishPayload(
-          config.mqtt,
-          block.topic,
-          block.values,
-        );
-        published = published && blockPublished;
+      if (config.layoutMode === "custom") {
+        for (const block of dataBlocks) {
+          const delivered = await publishPayload(config.mqtt, block.topic, block.values);
+          published = delivered && published;
+        }
+      } else {
+        published = await publishDatablocks(config, dataBlocks);
       }
       const topics = dataBlocks.map((block) => block.topic);
-      setPollingStatus(config.id, {
+      setStatus({
         pollingStatus: published ? "HEALTHY" : "MQTT_NOT_CONFIGURED",
         mqttTopics: topics,
         registers: [],
@@ -139,7 +115,7 @@ export async function startModbusPoller(rawConfig) {
       });
       return { registers: [], dataBlocks, published, topics };
     }
-    const registers = await readModbusRegisters(client, config.registers);
+    const registers = await connection.run(config, (client) => readModbusRegisters(client, config.registers));
     const timestamp = new Date().toISOString();
     const payload = {
       plcId: config.id,
@@ -153,7 +129,7 @@ export async function startModbusPoller(rawConfig) {
     };
     const topic = config.mqttTopic || `festo/plc/${config.id}`;
     const published = await publishPayload(config.mqtt, topic, payload);
-    setPollingStatus(config.id, {
+    setStatus({
       pollingStatus: published ? "HEALTHY" : "MQTT_NOT_CONFIGURED",
       mqttTopic: topic,
       registers,
@@ -175,11 +151,10 @@ export async function startModbusPoller(rawConfig) {
         try {
           await readAndPublish();
         } catch (error) {
-          await closeClient();
-          setPollingStatus(config.id, {
+          setStatus({
             pollingStatus: "UNHEALTHY",
-            registers: getModbusPollerStatus(config.id).registers,
-            dataBlocks: getModbusPollerStatus(config.id).dataBlocks,
+            registers: getStatus().registers,
+            dataBlocks: getStatus().dataBlocks,
             error: modbusErrorMessage(error),
           });
           console.error(`Modbus PLC ${config.id} polling failed`, error);
@@ -195,14 +170,20 @@ export async function startModbusPoller(rawConfig) {
   const poller = {
     get config() { return config; },
     update: (nextConfig) => runExclusive(async () => {
+      if (
+        config.readMode !== nextConfig.readMode ||
+        (config.layoutMode ?? "standard") !== (nextConfig.layoutMode ?? "standard") ||
+        config.endian !== nextConfig.endian
+      ) {
+        publishDatablocks = createModbusDatablockPublisher(publishPayload);
+      }
       config = nextConfig;
       try {
         // Saving changes the polling configuration, not the TCP connection.
         return { connected: true, ...await readAndPublish() };
       } catch (error) {
         // The saved configuration stays active even when its first read fails.
-        await closeClient();
-        setPollingStatus(config.id, {
+        setStatus({
           pollingStatus: "UNHEALTHY",
           registers: [],
           dataBlocks: [],
@@ -214,30 +195,29 @@ export async function startModbusPoller(rawConfig) {
       }
     }),
     test: (testConfig) => runExclusive(async () => {
-      await connectIfNeeded();
-      return readModbusSample(client, testConfig);
+      return connection.run(testConfig, (client) => readModbusSample(client, testConfig));
     }),
     stop: () => {
       if (!stopPromise) {
         stopped = true;
         clearTimeout(timer);
         // Let an in-flight read finish before closing its socket.
-        stopPromise = operationQueue.then(closeClient);
+        stopPromise = operationQueue.then(() => connection.release());
       }
       return stopPromise;
     },
   };
   // Register before the first read so a concurrent test also joins the queue.
-  activePollers.set(config.id, poller);
+  activePollers.set(key, poller);
   try {
     const result = await runExclusive(readAndPublish);
     schedulePoll();
     return { connected: true, ...result };
   } catch (error) {
     await poller.stop();
-    if (activePollers.get(config.id) === poller) {
-      activePollers.delete(config.id);
-      setPollingStatus(config.id, {
+    if (activePollers.get(key) === poller) {
+      activePollers.delete(key);
+      setStatus({
         pollingStatus: "UNHEALTHY",
         registers: [],
         dataBlocks: [],

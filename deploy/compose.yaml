@@ -1,0 +1,62 @@
+name: festo-connector
+
+services:
+  db:
+    image: postgres:17-bookworm
+    platform: ${DEPLOY_PLATFORM:-linux/amd64}
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: festo
+      POSTGRES_DB: festo_connector
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U festo -d festo_connector"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  app:
+    image: festo-connector:1.0.2
+    platform: ${DEPLOY_PLATFORM:-linux/amd64}
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: festo
+      PGDATABASE: festo_connector
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}
+      XDG_CONFIG_HOME: /app/data
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - app_data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  app_data:

@@ -19,7 +19,7 @@ import ConnectionDetails from "./ConnectionDetails";
 import type { S7PollingStatus } from "./ConnectionDetails";
 import {
   connectionDisplayError, connectionDisplayStatus,
-  loadModbusConnectionStatus, modbusStatusKey,
+  loadModbusConnectionStatus, modbusStatusKey, isModbusConnection, modbusEndpoint,
 } from "./modbusStatus";
 import type { ModbusConnectionStatus } from "./modbusStatus";
 
@@ -29,6 +29,7 @@ const editPaths: Record<string, string> = {
   ads: "/add/beckhoff",
   "opc.tcp": "/add/opcua",
   "modbus.tcp": "/add/modbus",
+  "modbus.customised.tcp": "/add/modbus",
 };
 function Action({
   icon,
@@ -115,7 +116,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const targets = connections.filter(
-      (connection) => connection.protocol === "modbus.tcp",
+      isModbusConnection,
     );
     if (targets.length === 0) return;
 
@@ -236,9 +237,9 @@ export default function Dashboard() {
   };
   const deleteConnection = async (connection: SavedConnection) => {
     try {
-      if (connection.protocol === "modbus.tcp") {
+      if (isModbusConnection(connection)) {
         const stopResponse = await fetch(
-          `/api/plcs/modbus/${encodeURIComponent(connection.id)}`,
+          `${modbusEndpoint(connection)}/${encodeURIComponent(connection.id)}`,
           { method: "DELETE" },
         );
         if (!stopResponse.ok) {

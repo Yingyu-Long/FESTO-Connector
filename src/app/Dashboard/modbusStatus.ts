@@ -1,4 +1,13 @@
 import type { SavedConnection } from "../storage";
+import { CUSTOMISED_ENDPOINT, CUSTOMISED_PROTOCOL } from "../../../shared/modbusCustomised.js";
+
+export function isModbusConnection(connection: SavedConnection) {
+  return connection.protocol === "modbus.tcp" || connection.protocol === CUSTOMISED_PROTOCOL;
+}
+
+export function modbusEndpoint(connection: SavedConnection) {
+  return connection.protocol === CUSTOMISED_PROTOCOL ? CUSTOMISED_ENDPOINT : "/api/plcs/modbus";
+}
 
 export type ModbusConnectionStatus = {
   status: "connected" | "disconnected" | "unavailable";
@@ -7,6 +16,7 @@ export type ModbusConnectionStatus = {
 
 export function modbusStatusKey(connection: SavedConnection) {
   return JSON.stringify([
+    connection.protocol,
     connection.id.trim(),
     connection.host.trim(),
     Number(connection.port),
@@ -19,7 +29,7 @@ export function connectionDisplayStatus(
   connection: SavedConnection,
   liveStatus?: ModbusConnectionStatus,
 ) {
-  return connection.protocol === "modbus.tcp"
+  return isModbusConnection(connection)
     ? (liveStatus?.status ?? connection.status)
     : connection.status;
 }
@@ -31,7 +41,7 @@ export function connectionDisplayError(
   if (connectionDisplayStatus(connection, liveStatus) === "connected") {
     return undefined;
   }
-  return connection.protocol === "modbus.tcp"
+  return isModbusConnection(connection)
     ? (liveStatus?.error || connection.connectionError)
     : connection.connectionError;
 }
@@ -42,7 +52,7 @@ export async function loadModbusConnectionStatus(
 ): Promise<ModbusConnectionStatus> {
   try {
     const response = await fetch(
-      `/api/plcs/modbus/${encodeURIComponent(connection.id.trim())}/status`,
+      `${modbusEndpoint(connection)}/${encodeURIComponent(connection.id.trim())}/status`,
       { signal },
     );
     if (!response.ok) throw new Error("Unable to read PLC status");

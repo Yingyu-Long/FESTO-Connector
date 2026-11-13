@@ -83,6 +83,7 @@ function parseMessageSource(source: unknown, index: number): SavedConnection {
         slot: uri.searchParams.get("remote-slot") ?? "1",
         dataBlocks,
         messageLayout: String(configuration.messageLayout ?? "mip"),
+        mqttTopic: typeof configuration.mqttTopic === "string" ? configuration.mqttTopic.trim() : "",
       },
     };
   }

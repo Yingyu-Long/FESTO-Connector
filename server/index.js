@@ -1,11 +1,14 @@
 import cors from "cors";
 import express from "express";
+import { extname } from "node:path";
+import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { query } from "./database.js";
 import { testMqttConnection } from "./mqttPublisher.js";
 import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
 import {
   ModbusConfigurationError,
+  normalizeModbusConfig,
   modbusErrorMessage,
 } from "./plc/modbusClient.js";
 import {
@@ -14,7 +17,18 @@ import {
   stopModbusPoller,
   testModbusPollerConnection,
 } from "./plc/modbusPoller.js";
-import { startOpcuaPoller, stopOpcuaPoller } from "./plc/opcuaPoller.js";
+import {
+  normalizeOpcuaDataBlocks,
+  startOpcuaPoller,
+  stopOpcuaPoller,
+} from "./plc/opcuaPoller.js";
+import { CUSTOMISED_ENDPOINT, normaliseCustomisedConfig } from "../shared/modbusCustomised.js";
+import {
+  getCustomisedModbusPollerStatus,
+  startCustomisedModbusPoller,
+  stopCustomisedModbusPoller,
+  testCustomisedModbusPollerConnection,
+} from "./plc/modbusCustomisedPoller.js";
 import {
   getSiemensPollerStatus,
   startSiemensPoller,
@@ -29,7 +43,7 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", async (_request, response) => {
   try {
-    await query("SELECT 1");
+    await query("SELECT 1 FROM public.connector_configurations LIMIT 0");
     response.json({ ok: true, database: true });
   } catch (error) {
     console.error("Database health check failed", error);
@@ -224,14 +238,12 @@ app.post("/api/plcs/modbus/test", async (request, response) => {
 
 app.post("/api/plcs/modbus/connect", async (request, response) => {
   try {
-    if (
-      request.body?.previousId &&
-      String(request.body.previousId) !== String(request.body.id)
-    ) {
-      await stopModbusPoller(request.body.previousId);
+    const config = normalizeModbusConfig(request.body);
+    const result = await startModbusPoller(config);
+    if (config.previousId && String(config.previousId) !== config.id) {
+      await stopModbusPoller(config.previousId);
     }
-    const result = await startModbusPoller(request.body);
-    response.json({ connected: true, plcId: request.body.id, ...result });
+    response.json({ connected: true, plcId: config.id, ...result });
   } catch (error) {
     console.error(`Modbus PLC ${request.body?.id} connection failed`, error);
     modbusError(response, error);
@@ -244,6 +256,40 @@ app.get("/api/plcs/modbus/:id/status", (request, response) => {
 
 app.delete("/api/plcs/modbus/:id", async (request, response) => {
   await stopModbusPoller(request.params.id);
+  response.status(204).end();
+});
+
+// Compatibility endpoints for saved experimental records; transport is shared.
+for (const action of ["test", "connect"]) {
+  app.post(`${CUSTOMISED_ENDPOINT}/${action}`, async (request, response) => {
+    let config;
+    try {
+      config = normaliseCustomisedConfig(request.body);
+    } catch (error) {
+      response.status(400).json({ connected: false, error: modbusErrorMessage(error) });
+      return;
+    }
+    try {
+      if (action === "test") {
+        const sample = await testCustomisedModbusPollerConnection(config);
+        response.json({ connected: true, sample });
+      } else {
+        if (config.previousId && String(config.previousId) !== config.id) {
+          await stopCustomisedModbusPoller(config.previousId);
+        }
+        const result = await startCustomisedModbusPoller(config);
+        response.json({ connected: true, plcId: config.id, ...result });
+      }
+    } catch (error) {
+      response.status(502).json({ connected: false, error: modbusErrorMessage(error) });
+    }
+  });
+}
+app.get(`${CUSTOMISED_ENDPOINT}/:id/status`, (request, response) => {
+  response.json(getCustomisedModbusPollerStatus(request.params.id));
+});
+app.delete(`${CUSTOMISED_ENDPOINT}/:id`, async (request, response) => {
+  await stopCustomisedModbusPoller(request.params.id);
   response.status(204).end();
 });
 
@@ -295,16 +341,25 @@ app.post("/api/plcs/opcua/connect", async (request, response) => {
   const config = request.body;
   if (
     !hasOpcuaEndpoint(config) ||
-    !config?.id ||
-    !Array.isArray(config.nodeIds) ||
-    config.nodeIds.length === 0
+    !config?.id
   ) {
     response
       .status(400)
       .json({
         connected: false,
-        error: "OPC UA id, endpoint, and at least one NodeId are required",
+        error: "OPC UA id and endpoint are required",
       });
+    return;
+  }
+
+  let dataBlocks;
+  try {
+    dataBlocks = normalizeOpcuaDataBlocks(config);
+  } catch (error) {
+    response.status(400).json({
+      connected: false,
+      error: error instanceof Error ? error.message : "Invalid OPC UA Datablocks",
+    });
     return;
   }
 
@@ -312,7 +367,7 @@ app.post("/api/plcs/opcua/connect", async (request, response) => {
     if (config.previousId && String(config.previousId) !== String(config.id)) {
       await stopOpcuaPoller(config.previousId);
     }
-    await startOpcuaPoller(config);
+    await startOpcuaPoller({ ...config, dataBlocks });
     response.json({ connected: true, plcId: config.id });
   } catch (error) {
     opcuaError(response, error);
@@ -323,6 +378,29 @@ app.delete("/api/plcs/opcua/:id", async (request, response) => {
   await stopOpcuaPoller(request.params.id);
   response.status(204).end();
 });
+
+if (process.env.NODE_ENV === "production") {
+  const frontendDirectory = fileURLToPath(new URL("../dist/", import.meta.url));
+
+  app.use("/api", (_request, response) => {
+    response.status(404).json({ error: "API endpoint not found" });
+  });
+
+  app.use(express.static(frontendDirectory));
+  app.get("/{*path}", (request, response, next) => {
+    if (
+      request.path === "/assets" ||
+      request.path.startsWith("/assets/") ||
+      extname(request.path) ||
+      !request.accepts("html")
+    ) {
+      next();
+      return;
+    }
+
+    response.sendFile("index.html", { root: frontendDirectory });
+  });
+}
 
 app.listen(port, () => {
   console.log(`PLC backend listening on http://localhost:${port}`);

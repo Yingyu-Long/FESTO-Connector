@@ -4,6 +4,13 @@
 
 FESTO Connector is a web application that connects Siemens S7, OPC UA, and Modbus TCP devices to an MQTT broker. Use the dashboard to configure PLC connections, select data to read, and send the collected values through MQTT.
 
+## Customer deployment with Docker
+
+For an offline deployment to a Windows Intel/AMD computer, see the
+[Chinese deployment guide](deploy/README.md). The deployment package includes
+the application and PostgreSQL images, Compose configuration, and database
+schema only; existing development configuration data is not included.
+
 ## Run on a New Computer
 
 ### 1. Install the required software
@@ -85,6 +92,13 @@ Keep both terminals running while using the application.
 4. Configure the data to read and click **Save**.
 5. Check the dashboard status and subscribe to the MQTT topic to verify the output.
 
+On the Siemens S7 configuration page, **MQTT topic** lets you set the exact
+publish topic for the MIP data block. Leave it blank to generate
+`festo-ax/pni/<Valve Terminal Id>/<Valve Id>/<Cylinder Id>` from the PLC IDs.
+Manual topics are preserved when saving, reconnecting, and importing/exporting
+configuration. Topics cannot contain `+`, `#`, or null characters and must fit
+within 65535 UTF-8 bytes; leading and trailing whitespace is trimmed.
+
 ## Modbus TCP Datablocks
 
 Select **Read by Datablocks**, enter the block count and **Start address**
@@ -94,8 +108,8 @@ contains **58 holding registers / 116 bytes**:
 | Variables | Register offsets | Registers |
 | --- | --- | --- |
 | Eight `timestamp_*` ULINT values, in the order shown in the configuration page | 0–31 | 32 |
-| `udiCycleCounter` (UDINT) | 32–33 | 2 |
-| `sPartnumber` (STRING[48]) | 34–57 | 24 |
+| `cycle_counter` (UDINT) | 32–33 | 2 |
+| `part_number` (STRING[48]) | 34–57 | 24 |
 
 Blocks are consecutive: two blocks starting at 0 read 0–57 and
 58–115. The start address is sent directly as the zero-based Modbus
@@ -155,9 +169,28 @@ is split into 58-register blocks for decoding and publication to each block's
 configured MQTT topic. Decoding uses the high word and high byte first.
 The supplied string layout is interpreted as 48 bytes without a
 length header, ending at the first zero byte or the end of the field. MQTT
-messages contain only the ten decoded variables as top-level JSON properties,
-without `fields` or connection metadata. ULINT timestamps are decimal strings
-so all 64 bits are preserved. Each block is published to its configured topic.
+messages contain eight `timestamp_*` fields as JSON numbers, a numeric
+`cycle_counter`, a string `part_number`, and `isThisAutomaticMode: true`, all as top-level properties
+without `fields` or connection metadata. `isThisAutomaticMode` is fixed to true
+to match the simulation payload; it is not read from a PLC mode flag.
+`part_number` is read from the PLC and included in each MQTT payload.
+Timestamps retain their PLC values and units; no clock or unit
+conversion is applied. The decoder keeps ULINT values as decimal strings
+internally; MQTT publication converts them to numbers. Values above
+9007199254740991 fail publication with an error rather than lose precision.
+Each block publishes a complete initial snapshot
+to its configured topic, including when its trigger timestamp is zero. After
+that, it publishes all eleven fields only when that block's
+`timestamp_DI_IPos_ON` differs from its last successfully published value.
+Changes to other fields alone do not trigger a message. Every block is tracked
+independently, and a failed publish is retried on a later polling round.
+Polling and dashboard values continue updating even when no message is sent.
+Enable **Test mode** next to **Polling interval** to publish all eleven fields for
+every datablock on every polling round, even when `timestamp_DI_IPos_ON` is
+unchanged. It defaults to off and is saved with the connection. Turning it off
+resumes change-triggered publishing relative to the last successful delivery.
+An unchanged Save/Rescan preserves the last published timestamp; a new poller,
+MQTT destination, block address, or topic receives an initial snapshot again.
 **Test connection**, **Save**, and dashboard **Rescan** all
 support this mode.
 
@@ -186,6 +219,12 @@ remain in the editor for correction.
 
 ## Project structure
 
+The Modbus publishing regression tests run on Node.js 22.12+:
+
+```bash
+node --experimental-test-module-mocks --test tests/*.test.mjs
+```
+
 - `src/app/AppLayout.tsx`: shared header, navigation, and footer.
 - `src/app/storage.ts`: local configuration storage, connection identity, and deduplication.
 - `src/app/Add/`: PLC/MQTT editors and Modbus Excel import/template generation.
@@ -199,3 +238,67 @@ Run `npm run lint` to check frontend and backend code, and `npm run build` to
 check TypeScript and build the frontend. Beckhoff and Rockwell settings can be
 saved, but their backend connections are not implemented yet. Their connection
 buttons report this directly without simulating a network request.
+
+
+### Integrated Modbus datablock layouts
+
+Add PLC → **Modbus TCP** → **Read by Datablocks** now offers two layouts:
+**Custom layout** for editable fields and **Standard FB** for the existing
+58-register layout. New connections default to custom; existing configurations
+without `layoutMode` keep the standard reader, numeric timestamps, trigger-based
+publishing, `isThisAutomaticMode`, Excel templates and test mode.
+
+The editor groups connection settings, layout/addressing and MQTT output into
+separate panels. Custom MQTT output follows the field names exactly.
+
+- **Datablock layout** has Import Excel / Download template actions in its
+  heading. The `Datablock layout` worksheet contains Variable name, Data type,
+  Width and Unit. Numeric widths use bits; STRING can use bytes or bits. Import
+  replaces the field rows only after full validation and preserves worksheet order.
+- **MQTT output** provides its own Import Excel / Download template actions for
+  both layouts. Its address range validation uses the current registers per block;
+  MQTT templates edit block topics, start address and polling, not field definitions.
+- Set **Fields** above the layout to create that number of rows (e.g. 2 creates
+  two rows). Increasing the count preserves existing rows; decreasing it removes
+  rows from the end. Drag a row by its left handle to reorder it.
+- Define variable names, data types and STRING byte lengths. Integer widths are
+  selectable as 16/32/64 bits and floating point widths as 32/64 bits; selecting a
+  width updates the PLC type within its signed/unsigned/floating point family.
+  For example, changing ULINT from 64 to 32 bits selects UDINT. BOOL uses 16 bits.
+- Fields occupy consecutive 16-bit holding registers, starting at a zero-based
+  address. STRING is raw UTF-8 without a length header, terminated by a null byte
+  or the configured byte length. Odd byte lengths pad the last register. BOOL
+  occupies a complete register. There is no implicit PLC alignment or bit packing.
+- All consecutive datablocks use the same layout, with a separate MQTT topic for
+  each block. A new custom layout starts with one empty row, without preset names,
+  data types or widths. Saved layouts are loaded as configured.
+- Big-Endian uses high words first. Little-Endian reverses register order within
+  each field, including strings, while preserving the bytes within a register.
+- Test connection validates the read without publishing. Save
+  starts polling, and MQTT publishes **only the configured field names and values**
+  on every polling round. LINT/ULINT values are decimal JSON strings to retain all
+  64 bits. No fixed trigger field or additional automatic-mode field is required.
+- FC03 requests contain complete datablocks only, up to 125 registers per request.
+  Each request reads `floor(125 / registersPerBlock)` blocks (or the remaining
+  blocks in the last batch): 40-register blocks use 120-register requests,
+  58-register blocks use 116, and 64-register blocks use 64. The next request starts
+  immediately after the last complete block, without gaps or overlapping reads.
+  A single block exceeding 125 registers is rejected by the editor, Excel layout
+  import and backend instead of being split. Each block is decoded and published
+  to its own MQTT topic; separate requests are not one atomic PLC snapshot.
+- Layouts persist through save/edit, configuration export/import and dashboard
+  reconnect. New records use `modbus.tcp` and `/api/plcs/modbus` for both layouts.
+- TCP transport is shared per hostname/IP and port. Polling and connection tests
+  are serialized on the socket, with Unit ID and timeout applied per operation.
+  A test does not change a running layout or publish MQTT. Stopping one acquisition
+  only closes the socket when no other acquisition is using it. Hostname aliases
+  and literal IP addresses are different pool keys; use the same address spelling.
+- Saved experimental records and `/add/modbus-customised` remain compatible.
+  Editing them opens the unified form. A successful Save migrates the record to
+  `modbus.tcp`; a conflicting existing Id must be changed first. Compatibility API
+  routes use the same transport pool and retain separate subscription IDs.
+- Restart the backend after upgrading to load the shared connection pool, then use
+  Rescan to resume saved acquisitions. No PLC configuration changes are required.
+
+Validation: `npm run build`, `npm run lint`, and
+`node --experimental-test-module-mocks --test tests/*.test.mjs`.

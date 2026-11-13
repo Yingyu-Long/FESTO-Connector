@@ -13,6 +13,13 @@ dist-ssr
 .env
 *.local
 
+# Generated customer delivery archives and database backups
+deploy/*.tar
+deploy/*.tar.partial
+deploy/*.sha256
+deploy/*.dump
+deploy/*.backup.sql
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

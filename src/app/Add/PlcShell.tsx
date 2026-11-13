@@ -21,6 +21,7 @@ export function Field({
   help,
   suffix,
   className,
+  placeholder,
 }: {
   label: string;
   value: string;
@@ -31,6 +32,7 @@ export function Field({
   help?: string;
   suffix?: string;
   className?: string;
+  placeholder?: string;
 }) {
   return (
     <label
@@ -44,6 +46,7 @@ export function Field({
         <input
           type={type}
           value={value}
+          placeholder={placeholder}
           onChange={(event) => onChange(event.target.value)}
         />
         {suffix && <b>{suffix}</b>}

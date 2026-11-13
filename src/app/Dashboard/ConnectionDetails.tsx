@@ -1,5 +1,6 @@
 import { IconCheckStatus, IconFailure, IconRefresh } from "@festo-ui/react-icons";
 import type { SavedConnection } from "../storage";
+import { CUSTOMISED_PROTOCOL, normaliseCustomisedConfig } from "../../../shared/modbusCustomised.js";
 import {
   MODBUS_DATABLOCK_DEFAULT_START_ADDRESS,
   MODBUS_DATABLOCK_REGISTER_COUNT,
@@ -13,6 +14,7 @@ type DetailItem = {
 
 type S7DataBlockStatus = {
   dataBlock: number | string;
+  mqttTopic?: string;
   cylinderId?: string;
   valveId?: string;
   valveTerminalId?: string;
@@ -27,7 +29,54 @@ export type S7PollingStatus = {
 function connectionDetailItems(connection: SavedConnection): DetailItem[] {
   const config = connection.config ?? {};
 
+  if (connection.protocol === CUSTOMISED_PROTOCOL || (connection.protocol === "modbus.tcp" && config.readMode === "Read by Datablocks" && config.layoutMode === "custom")) {
+    try {
+      const custom = normaliseCustomisedConfig({ ...config, blockCount: config.registerCount ?? config.blockCount, id: connection.id, host: connection.host, port: connection.port });
+      return custom.blockTopics.map((topic, index) => {
+        const start = custom.startAddress + index * custom.registersPerBlock;
+        return {
+          label: `Datablock ${index + 1}`,
+          value: `Holding registers: ${start}–${start + custom.registersPerBlock - 1} | ${custom.fields.map((field) => `${field.name}: ${field.dataType === "STRING" ? `STRING[${field.bitWidth / 8}]` : field.dataType}`).join(", ")}`,
+          mqttTopic: topic,
+        };
+      });
+    } catch {
+      return [{ label: "Invalid customised layout", value: "Edit this PLC to correct its configuration." }];
+    }
+  }
+
   if (connection.protocol === "opc.tcp") {
+    const configuredBlocks = Array.isArray(config.dataBlocks) ? config.dataBlocks : [];
+    if (configuredBlocks.length > 0) {
+      return configuredBlocks.flatMap((raw, index) => {
+        if (typeof raw !== "object" || raw === null) return [];
+        const block = raw as Record<string, unknown>;
+        const rawNodes = Array.isArray(block.nodes) && block.nodes.length > 0
+          ? block.nodes
+          : Array.isArray(block.selectedNodes) && block.selectedNodes.length > 0
+            ? block.selectedNodes
+            : Array.isArray(block.nodeIds)
+              ? block.nodeIds.map((nodeId) => ({ nodeId }))
+              : [];
+        const nodes = rawNodes.flatMap((node) => {
+          if (typeof node === "string") return [node];
+          if (typeof node !== "object" || node === null) return [];
+          const value = node as Record<string, unknown>;
+          if (typeof value.nodeId !== "string") return [];
+          const label = typeof value.displayName === "string" ? value.displayName : value.nodeId;
+          return [`${label} (${value.nodeId})`];
+        });
+        const topic = typeof block.mqttTopic === "string" && block.mqttTopic.trim()
+          ? block.mqttTopic.trim()
+          : `festo/plc/${connection.id}${index === 0 ? "" : `/datablock-${index + 1}`}`;
+        return [{
+          label: typeof block.name === "string" && block.name.trim() ? block.name : `Datablock ${index + 1}`,
+          value: nodes.join(", "),
+          mqttTopic: topic,
+        }];
+      });
+    }
+
     const selectedNodes = Array.isArray(config.selectedNodes)
       ? config.selectedNodes
       : [];
@@ -45,12 +94,21 @@ function connectionDetailItems(connection: SavedConnection): DetailItem[] {
         },
       ];
     });
-    if (namedNodes.length > 0) return namedNodes;
-
-    return Array.isArray(config.nodeIds)
-      ? config.nodeIds
-          .filter((nodeId): nodeId is string => typeof nodeId === "string")
-          .map((nodeId) => ({ label: nodeId, value: nodeId }))
+    const fallbackNodes = namedNodes.length > 0
+      ? namedNodes
+      : Array.isArray(config.nodeIds)
+        ? config.nodeIds
+            .filter((nodeId): nodeId is string => typeof nodeId === "string")
+            .map((nodeId) => ({ label: nodeId, value: nodeId }))
+        : [];
+    return fallbackNodes.length > 0
+      ? [{
+          label: "Datablock 1",
+          value: fallbackNodes.map((node) => `${node.label} (${node.value})`).join(", "),
+          mqttTopic: typeof config.mqttTopic === "string" && config.mqttTopic.trim()
+            ? config.mqttTopic.trim()
+            : `festo/plc/${connection.id}`,
+        }]
       : [];
   }
 
@@ -189,6 +247,7 @@ function S7DataBlockDetails({
               <th>Cylinder Id</th>
               <th>Valve Id</th>
               <th>Valve Terminal Id</th>
+              <th>MQTT topic</th>
               <th>Polling Status</th>
             </tr>
           </thead>
@@ -199,6 +258,7 @@ function S7DataBlockDetails({
                 <td>{dataBlock.cylinderId || "--"}</td>
                 <td>{dataBlock.valveId || "--"}</td>
                 <td>{dataBlock.valveTerminalId || "--"}</td>
+                <td>{dataBlock.mqttTopic || (typeof connection.config?.mqttTopic === "string" && connection.config.mqttTopic.trim()) || "Automatic (PLC IDs)"}</td>
                 <td>
                   <S7PollingLabel status={pollingStatus} />
                 </td>
@@ -221,7 +281,7 @@ export default function ConnectionDetails({
   error?: string;
 }) {
   const byDatablocks =
-    connection.protocol === "modbus.tcp" &&
+    (connection.protocol === "modbus.tcp" || connection.protocol === CUSTOMISED_PROTOCOL) &&
     connection.config?.readMode === "Read by Datablocks";
 
   if (connection.protocol === "s7") {
@@ -236,8 +296,8 @@ export default function ConnectionDetails({
   const items = connectionDetailItems(connection);
   const heading =
     connection.protocol === "opc.tcp"
-      ? "Selected OPC UA nodes"
-      : connection.protocol === "modbus.tcp"
+      ? "OPC UA Datablocks"
+      : connection.protocol === "modbus.tcp" || connection.protocol === CUSTOMISED_PROTOCOL
         ? connection.config?.readMode === "Read by Datablocks"
           ? "Read by Datablocks"
           : "Read by registers"

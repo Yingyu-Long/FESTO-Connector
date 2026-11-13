@@ -1,12 +1,15 @@
 import ModbusRTU from "modbus-serial";
+import { normaliseCustomisedConfig } from "../../shared/modbusCustomised.js";
+import { readCustomisedDatablocks } from "./modbusCustomisedReader.js";
 import {
   MODBUS_DATABLOCK_DEFAULT_START_ADDRESS,
   MODBUS_DATABLOCK_FIELDS,
   MODBUS_DATABLOCK_REGISTER_COUNT,
+  MODBUS_MAX_READ_REGISTERS,
 } from "../../shared/modbusDatablock.js";
 
 // FC03 allows up to 125 registers per request; keep each FB in one response.
-const DATABLOCKS_PER_REQUEST = Math.floor(125 / MODBUS_DATABLOCK_REGISTER_COUNT);
+const DATABLOCKS_PER_REQUEST = Math.floor(MODBUS_MAX_READ_REGISTERS / MODBUS_DATABLOCK_REGISTER_COUNT);
 
 const REGISTER_TYPES = new Set([
   "Coil",
@@ -52,6 +55,16 @@ function integer(value, label, minimum, maximum) {
 }
 
 function normalizeDatablocks(config) {
+  const testMode = config.testMode === undefined ? false : config.testMode;
+  if (typeof testMode !== "boolean") {
+    throw new ModbusConfigurationError("Datablock test mode must be a boolean");
+  }
+  const endian = config.endian === undefined ? "Big-Endian" : config.endian;
+  if (!["Big-Endian", "Little-Endian"].includes(endian)) {
+    throw new ModbusConfigurationError(
+      "Datablock endian must be Big-Endian or Little-Endian",
+    );
+  }
   const startAddress = integer(
     config.startAddress === undefined
       ? MODBUS_DATABLOCK_DEFAULT_START_ADDRESS
@@ -96,7 +109,7 @@ function normalizeDatablocks(config) {
     }
     return topic;
   });
-  return { startAddress, registerCount, blockTopics, registers: [] };
+  return { endian, testMode, startAddress, registerCount, blockTopics, registers: [] };
 }
 
 function registerLength(dataType) {
@@ -172,7 +185,20 @@ export function normalizeModbusConfig(config) {
   if (!host) throw new ModbusConfigurationError("Modbus host is required");
   let readingConfig;
   if (config.readMode === "Read by Datablocks") {
-    readingConfig = normalizeDatablocks(config);
+    if (config.layoutMode === "custom") {
+      try {
+        readingConfig = normaliseCustomisedConfig({ ...config, blockCount: config.registerCount ?? config.blockCount });
+        readingConfig.registerCount = readingConfig.blockCount;
+        readingConfig.registers = [];
+      } catch (error) {
+        throw new ModbusConfigurationError(error.message);
+      }
+    } else {
+      if (config.layoutMode !== undefined && config.layoutMode !== "standard") {
+        throw new ModbusConfigurationError("Unsupported datablock layout mode");
+      }
+      readingConfig = normalizeDatablocks(config);
+    }
   } else {
     if (!Array.isArray(config.registers) || config.registers.length === 0) {
       throw new ModbusConfigurationError(
@@ -341,7 +367,7 @@ export async function readModbusRegisters(client, registers) {
   return values;
 }
 
-function decodeModbusDatablock(words) {
+function decodeModbusDatablock(words, endian) {
   if (
     !Array.isArray(words) ||
     words.length !== MODBUS_DATABLOCK_REGISTER_COUNT ||
@@ -351,22 +377,23 @@ function decodeModbusDatablock(words) {
       `Datablock response must contain ${MODBUS_DATABLOCK_REGISTER_COUNT} valid registers`,
     );
   }
-  const buffer = Buffer.alloc(MODBUS_DATABLOCK_REGISTER_COUNT * 2);
-  words.forEach((word, index) => buffer.writeUInt16BE(word, index * 2));
   return Object.fromEntries(
     MODBUS_DATABLOCK_FIELDS.map((field) => {
-      const offset = field.offset * 2;
+      const fieldWords = words.slice(field.offset, field.offset + field.registerCount);
+      // Reverse registers only within this variable; preserve each word's bytes.
+      if (endian === "Little-Endian") fieldWords.reverse();
+      const buffer = Buffer.alloc(field.registerCount * 2);
+      fieldWords.forEach((word, index) => buffer.writeUInt16BE(word, index * 2));
       let value;
       if (field.dataType === "ULINT") {
         // Decimal strings retain all 64 bits when serialized as JSON.
-        value = buffer.readBigUInt64BE(offset).toString();
+        value = buffer.readBigUInt64BE(0).toString();
       } else if (field.dataType === "UDINT") {
-        value = buffer.readUInt32BE(offset);
+        value = buffer.readUInt32BE(0);
       } else {
         // The PLC layout specifies 48 string bytes, without a length header.
-        const bytes = buffer.subarray(offset, offset + field.registerCount * 2);
-        const end = bytes.indexOf(0);
-        value = bytes.subarray(0, end < 0 ? bytes.length : end).toString("utf8");
+        const end = buffer.indexOf(0);
+        value = buffer.subarray(0, end < 0 ? buffer.length : end).toString("utf8");
       }
       return [field.name, value];
     }),
@@ -374,6 +401,7 @@ function decodeModbusDatablock(words) {
 }
 
 export async function readModbusDatablocks(client, config) {
+  if (config.layoutMode === "custom") return readCustomisedDatablocks(client, config);
   const dataBlocks = [];
   for (
     let index = 0;
@@ -403,6 +431,7 @@ export async function readModbusDatablocks(client, config) {
           registerOffset,
           registerOffset + MODBUS_DATABLOCK_REGISTER_COUNT,
         ),
+        config.endian,
       );
       const blockIndex = index + offset;
       dataBlocks.push({

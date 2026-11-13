@@ -25,6 +25,7 @@ export default function App() {
         <Route path="/add/opcua" element={<Opcua />} />
         <Route path="/add/beckhoff" element={<Beckhoff />} />
         <Route path="/add/modbus" element={<Modbus />} />
+        <Route path="/add/modbus-customised" element={<Modbus />} />
         <Route path="/mqtt" element={<Mqtt />} />
         <Route path="/siemens" element={<Siemens />} />
         <Route path="/rockwell" element={<Rockwell />} />

@@ -67,6 +67,7 @@ function getMessageSourceConfiguration(connection: SavedConnection) {
         dbs,
         defaultPollingRate: String(polling ?? config.polling ?? "500"),
         messageLayout: String(config.messageLayout ?? "mip"),
+        mqttTopic: String(config.mqttTopic ?? "").trim(),
       },
     };
   }

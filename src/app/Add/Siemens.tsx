@@ -10,6 +10,7 @@ import { Field, FormActions, PlcShell, SelectField } from "./PlcShell";
 import { configString, readMqttConfig, saveConnection } from "../storage";
 import type { SavedConnection } from "../storage";
 import { connectPlc, saveCurrentConfiguration } from "../configurationApi";
+import { isValidMqttPublishTopic } from "../../../shared/mqttTopic.js";
 
 type DataBlock = {
   id: number;
@@ -41,6 +42,7 @@ export default function Siemens() {
     port: configString(editConnection, "port", editConnection?.port ?? "102"),
     rack: configString(editConnection, "rack", "0"),
     slot: configString(editConnection, "slot", "1"),
+    mqttTopic: configString(editConnection, "mqttTopic", ""),
   });
   const [dataBlocks, setDataBlocks] = useState<DataBlock[]>([
     ...(Array.isArray(savedBlocks) ? savedBlocks.filter(isDataBlock).slice(0, 1) : []),
@@ -64,12 +66,14 @@ export default function Siemens() {
           itemIndex === index ? { ...item, [key]: value } : item,
         ),
       );
+  const topicValid = !values.mqttTopic.trim() || isValidMqttPublishTopic(values.mqttTopic);
   const valid = Boolean(
     values.id &&
     values.host &&
     values.port &&
     values.rack &&
     values.slot &&
+    topicValid &&
     dataBlocks.every((item) => item.dataBlock && item.polling),
   );
   const buildBackendConfig = () => {
@@ -88,7 +92,7 @@ export default function Siemens() {
       })),
       messageLayout: "mip",
       mqtt: readMqttConfig(),
-      mqttTopic: `festo-ax/pni/${values.id}`,
+      mqttTopic: values.mqttTopic.trim(),
     };
   };
   const connectToBackend = async () => {
@@ -118,7 +122,7 @@ export default function Siemens() {
       port: values.port,
       details: `remote-rack: ${values.rack}, remote-slot: ${values.slot}, data-blocks: ${dataBlocks.map((item) => `${item.dataBlock}, polling: ${item.polling} ms`).join("; ")}`,
       ...result,
-      config: { ...values, dataBlocks, messageLayout: "mip" },
+      config: { ...values, mqttTopic: values.mqttTopic.trim(), dataBlocks, messageLayout: "mip" },
     });
     await saveCurrentConfiguration();
     navigate("/dashboard");
@@ -232,6 +236,18 @@ export default function Siemens() {
                 </div>
               ))}
             </div>
+            <Field
+              label="MQTT topic"
+              value={values.mqttTopic}
+              onChange={set("mqttTopic")}
+              required={false}
+              help="Leave blank to generate festo-ax/pni/<Valve Terminal Id>/<Valve Id>/<Cylinder Id> from the PLC."
+            />
+            {!topicValid && (
+              <p className="fwe-connection-error" role="alert">
+                MQTT topics must not contain +, # or null characters and must fit within 65535 UTF-8 bytes.
+              </p>
+            )}
           </form>
         </section>
         <FormActions

@@ -1,4 +1,5 @@
 import snap7 from "node-snap7";
+import { isValidMqttPublishTopic } from "../../shared/mqttTopic.js";
 
 function snap7Error(client, methodName, error) {
   if (error instanceof Error) return error;
@@ -46,14 +47,14 @@ const MIP_STRING_FIELDS = [
 ];
 
 const MIP_TIME_FIELDS = [
-  { name: "timestamp_DI_Pos_ON", offset: 500 },
-  { name: "timestamp_DI_Pos_OFF", offset: 504 },
+  { name: "timestamp_DI_IPos_ON", offset: 500 },
+  { name: "timestamp_DI_IPos_OFF", offset: 504 },
   { name: "timestamp_DI_EPos_ON", offset: 508 },
   { name: "timestamp_DI_EPos_OFF", offset: 512 },
-  { name: "timestamp_DO_MCtrl_1", offset: 516 },
-  { name: "timestamp_DO_MCtrl_2", offset: 520 },
-  { name: "timestamp_DO_MCtrl_3", offset: 524 },
-  { name: "timestamp_DO_MCtrl_4", offset: 528 },
+  { name: "timestamp_DO_MCtrl12_ON", offset: 516 },
+  { name: "timestamp_DO_MCtrl12_OFF", offset: 520 },
+  { name: "timestamp_DO_MCtrl14_ON", offset: 524 },
+  { name: "timestamp_DO_MCtrl14_OFF", offset: 528 },
 ];
 
 //get the range of data blocks to read based on the configuration
@@ -136,6 +137,13 @@ function mqttTopicSegment(identifier, fieldName, dataBlock, offset) {
  * TIME values are published as their signed millisecond values from the PLC.
  */
 export async function readSiemensMipMessage(client, config) {
+  const mqttTopic = typeof config.mqttTopic === "string" ? config.mqttTopic.trim() : "";
+  if (
+    (config.mqttTopic != null && typeof config.mqttTopic !== "string") ||
+    (mqttTopic && !isValidMqttPublishTopic(mqttTopic))
+  ) {
+    throw new Error("Invalid MQTT publish topic: use at most 65535 UTF-8 bytes without +, # or null characters");
+  }
   const dataBlock = configuredMipDataBlock(config);
   const identifiers = {};
 
@@ -161,7 +169,7 @@ export async function readSiemensMipMessage(client, config) {
       values.readInt32BE(field.offset - 500),
     ]),
   );
-  payload.udiCycleCounter = values.readUInt32BE(32);
+  payload.cycle_counter = values.readUInt32BE(32);
 
   return {
     dataBlock,
@@ -170,7 +178,7 @@ export async function readSiemensMipMessage(client, config) {
       valveId: identifiers.sValveID.value,
       valveTerminalId: identifiers.sValveterminalID.value,
     },
-    topic: [
+    topic: mqttTopic || [
       "festo-ax",
       "pni",
       mqttTopicSegment(

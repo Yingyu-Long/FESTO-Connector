@@ -65,6 +65,7 @@ export async function startSiemensPoller(config) {
           {
             dataBlock: message.dataBlock,
             ...message.identifiers,
+            mqttTopic: message.topic,
           },
         ],
       });

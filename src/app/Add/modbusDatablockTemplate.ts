@@ -1,21 +1,24 @@
 import type { CellObject, SheetData } from "write-excel-file/browser";
-import { MODBUS_DATABLOCK_REGISTER_COUNT } from "../../../shared/modbusDatablock.js";
+import { MODBUS_DATABLOCK_REGISTER_COUNT, MODBUS_MAX_READ_REGISTERS } from "../../../shared/modbusDatablock.js";
 
 type TemplateSettings = {
   blockCount: number;
+  registersPerBlock?: number;
   startAddress: number;
   polling: number;
   blockTopics: string[];
 };
 
-function createDatablockTemplateRows(settings: TemplateSettings): SheetData {
-  const { blockCount, startAddress, polling, blockTopics } = settings;
+export function createDatablockTemplateRows(settings: TemplateSettings): SheetData {
+  const { blockCount, startAddress, polling, blockTopics, registersPerBlock = MODBUS_DATABLOCK_REGISTER_COUNT } = settings;
   if (
+    !Number.isInteger(registersPerBlock) ||
+    registersPerBlock < 1 || registersPerBlock > MODBUS_MAX_READ_REGISTERS ||
     !Number.isInteger(blockCount) ||
     blockCount < 1 ||
     !Number.isInteger(startAddress) ||
     startAddress < 0 ||
-    startAddress + blockCount * MODBUS_DATABLOCK_REGISTER_COUNT > 65536
+    startAddress + blockCount * registersPerBlock > 65536
   ) {
     throw new Error(
       "Enter a valid Number of Datablocks and Start address before downloading.",
