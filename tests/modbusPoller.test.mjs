@@ -6,15 +6,21 @@ test("poller keeps reading and updating status while only publishing changed FBs
   let reads = 0;
   let connections = 0;
   const messages = [];
+  const makeCycleValues = (base, cycle_counter = 0) => ({
+    timestamp_DO_MCtrl14_ON: String(base),
+    timestamp_DO_MCtrl12_OFF: String(base),
+    timestamp_DI_IPos_OFF: String(base + 15),
+    timestamp_DI_EPos_ON: String(base + 50),
+    timestamp_DO_MCtrl12_ON: String(base + 65),
+    timestamp_DO_MCtrl14_OFF: String(base + 65),
+    timestamp_DI_EPos_OFF: String(base + 80),
+    timestamp_DI_IPos_ON: String(base + 110),
+    cycle_counter,
+    part_number: "part",
+  });
   const blocks = [0, 1].map((index) => ({
     index, startAddress: index * 58, registerCount: 58, topic: `fb/${index + 1}`,
-    values: {
-      timestamp_DI_IPos_ON: "1", timestamp_DI_IPos_OFF: "2",
-      timestamp_DI_EPos_ON: "3", timestamp_DI_EPos_OFF: "4",
-      timestamp_DO_MCtrl12_ON: "5", timestamp_DO_MCtrl12_OFF: "6",
-      timestamp_DO_MCtrl14_ON: "7", timestamp_DO_MCtrl14_OFF: "8",
-      cycle_counter: 0, part_number: "part",
-    },
+    values: makeCycleValues(1000, 0),
   }));
   t.mock.module(new URL("../server/mqttPublisher.js", import.meta.url).href, {
     namedExports: {
@@ -54,13 +60,20 @@ test("poller keeps reading and updating status while only publishing changed FBs
 
   await startModbusPoller(config);
   assert.equal(messages.length, 2);
+  assert.equal(getModbusPollerStatus(config.id).dataBlocks[0]?.lastDataUpdatedAt, null);
+  assert.equal(typeof getModbusPollerStatus(config.id).dataBlocks[0]?.firstSeenAt, "number");
+  assert.equal(getModbusPollerStatus(config.id).dataBlocks[0]?.updateCount, 0);
   blocks[0].values.cycle_counter = 25;
   await waitFor(() => getModbusPollerStatus(config.id).dataBlocks[0]?.values.cycle_counter === 25);
   assert.ok(reads >= 2);
   assert.equal(messages.length, 2);
   assert.equal(getModbusPollerStatus(config.id).pollingStatus, "HEALTHY");
+  assert.equal(typeof getModbusPollerStatus(config.id).dataBlocks[0]?.lastDataUpdatedAt, "number");
+  assert.equal(getModbusPollerStatus(config.id).dataBlocks[0]?.updateCount, 1);
+  assert.equal(getModbusPollerStatus(config.id).dataBlocks[1]?.lastDataUpdatedAt, null);
+  assert.equal(getModbusPollerStatus(config.id).dataBlocks[1]?.updateCount, 0);
 
-  blocks[1].values.timestamp_DI_IPos_ON = "2";
+  blocks[1].values = makeCycleValues(2000, 1);
   await waitFor(() => messages.length === 3);
   assert.equal(messages[2].topic, "fb/2");
   await startModbusPoller({ ...config, polling: 20 });

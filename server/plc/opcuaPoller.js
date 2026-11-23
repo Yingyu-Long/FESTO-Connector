@@ -6,10 +6,31 @@ import {
   TimestampsToReturn,
 } from "node-opcua";
 import { publishPayload } from "../mqttPublisher.js";
+import { recordDiagnosticEvent } from "../debugBot/diagnosticLog.js";
 import { isValidMqttPublishTopic } from "../../shared/mqttTopic.js";
 import { connectOpcua, disconnectOpcua } from "./opcuaClient.js";
 
 const activePollers = new Map();
+const pollingStatuses = new Map();
+
+export function getOpcuaPollerStatus(plcId) {
+  return (
+    pollingStatuses.get(String(plcId)) ?? {
+      plcId: String(plcId),
+      updatedAt: null,
+      pollingStatus: "NOT_CONNECTED",
+      dataBlocks: [],
+    }
+  );
+}
+
+export function listActiveOpcuaPollers() {
+  return Array.from(activePollers.entries()).map(([id, entry]) => ({
+    id: String(id),
+    status: getOpcuaPollerStatus(id),
+    dataBlockCount: entry.dataBlockCount ?? 0,
+  }));
+}
 
 function serializableValue(value) {
   if (Buffer.isBuffer(value)) return value.toString("base64");
@@ -139,6 +160,12 @@ export async function stopOpcuaPoller(plcId) {
 
   activePollers.delete(plcId);
   await poller.stop();
+  pollingStatuses.set(String(plcId), {
+    plcId: String(plcId),
+    updatedAt: Date.now(),
+    pollingStatus: "NOT_CONNECTED",
+    dataBlocks: getOpcuaPollerStatus(plcId).dataBlocks,
+  });
 }
 
 export async function startOpcuaPoller(config) {
@@ -201,17 +228,49 @@ export async function startOpcuaPoller(config) {
               latestValues.get(member.nodeId),
             ),
           };
-          void publishPayload(config.mqtt, block.mqttTopic, payload).catch(
-            (error) => {
+          void publishPayload(config.mqtt, block.mqttTopic, payload)
+            .then((published) => {
+              pollingStatuses.set(String(config.id), {
+                plcId: String(config.id),
+                updatedAt: Date.now(),
+                pollingStatus: published ? "HEALTHY" : "MQTT_NOT_CONFIGURED",
+                dataBlocks: dataBlocks.map((b) => ({
+                  name: b.name,
+                  mqttTopic: b.mqttTopic,
+                  nodeCount: b.nodes.length,
+                })),
+              });
+            })
+            .catch((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              pollingStatuses.set(String(config.id), {
+                plcId: String(config.id),
+                updatedAt: Date.now(),
+                pollingStatus: "UNHEALTHY",
+                dataBlocks: getOpcuaPollerStatus(config.id).dataBlocks,
+                error: message,
+              });
+              recordDiagnosticEvent({
+                level: "error",
+                component: "opcua",
+                plcId: config.id,
+                message: `OPC UA MQTT publish failed for ${block.name}: ${message}`,
+              });
               console.error(
                 `OPC UA ${config.id} MQTT publish failed for ${block.name}`,
                 error,
               );
-            },
-          );
+            });
         });
 
         monitoredItem.on("err", (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          recordDiagnosticEvent({
+            level: "error",
+            component: "opcua",
+            plcId: config.id,
+            message: `OPC UA monitor ${node.nodeId} failed: ${message}`,
+          });
           console.error(
             `OPC UA ${config.id} monitor ${node.nodeId} failed`,
             error,
@@ -220,7 +279,19 @@ export async function startOpcuaPoller(config) {
       }
     }
 
+    pollingStatuses.set(String(config.id), {
+      plcId: String(config.id),
+      updatedAt: Date.now(),
+      pollingStatus: config.mqtt?.host ? "HEALTHY" : "MQTT_NOT_CONFIGURED",
+      dataBlocks: dataBlocks.map((b) => ({
+        name: b.name,
+        mqttTopic: b.mqttTopic,
+        nodeCount: b.nodes.length,
+      })),
+    });
+
     activePollers.set(config.id, {
+      dataBlockCount: dataBlocks.length,
       stop: async () => {
         if (stopped) return;
         stopped = true;

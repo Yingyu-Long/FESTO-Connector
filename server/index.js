@@ -4,7 +4,7 @@ import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { query } from "./database.js";
-import { testMqttConnection } from "./mqttPublisher.js";
+import { closeAllMqttClients, testMqttConnection } from "./mqttPublisher.js";
 import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
 import {
   ModbusConfigurationError,
@@ -14,9 +14,27 @@ import {
 import {
   getModbusPollerStatus,
   startModbusPoller,
+  stopAllModbusPollers,
   stopModbusPoller,
   testModbusPollerConnection,
 } from "./plc/modbusPoller.js";
+import {
+  restoreModbusPollersFromDatabase,
+  syncModbusPollersWithConfiguration,
+} from "./plc/modbusBootstrap.js";
+import {
+  DEBUG_BOT_PROVIDER_PRESETS,
+  loadDebugBotConfig,
+  maskDebugBotConfigForClient,
+  saveDebugBotConfig,
+  testDebugBotLlmConnection,
+} from "./debugBot/configStore.js";
+import {
+  executeDebugBotTool,
+  listDebugBotTools,
+  runDebugBotChat,
+} from "./debugBot/agentEngine.js";
+import { recordDiagnosticEvent } from "./debugBot/diagnosticLog.js";
 import {
   normalizeOpcuaDataBlocks,
   startOpcuaPoller,
@@ -105,6 +123,9 @@ app.put("/api/configuration", async (request, response) => {
       `,
       [configuration.id, JSON.stringify(configuration)],
     );
+    void syncModbusPollersWithConfiguration(configuration).catch((error) => {
+      console.error("Failed to sync Modbus pollers after configuration update", error);
+    });
     response.json({ saved: true, id: configuration.id });
   } catch (error) {
     console.error("Unable to save configuration", error);
@@ -379,6 +400,106 @@ app.delete("/api/plcs/opcua/:id", async (request, response) => {
   response.status(204).end();
 });
 
+// Debug Bot routes (Multi-customer LLM settings + live Connector diagnostic skills)
+app.get("/api/debug-bot/config", async (_request, response) => {
+  try {
+    const { config, source } = await loadDebugBotConfig({ queryFn: query });
+    response.json({
+      config: maskDebugBotConfigForClient(config, source),
+      presets: DEBUG_BOT_PROVIDER_PRESETS,
+    });
+  } catch (error) {
+    response.status(500).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to load Debug Bot configuration",
+    });
+  }
+});
+
+app.put("/api/debug-bot/config", async (request, response) => {
+  try {
+    const { config, source } = await saveDebugBotConfig(request.body ?? {}, {
+      queryFn: query,
+    });
+    response.json({
+      saved: true,
+      config: maskDebugBotConfigForClient(config, source),
+    });
+  } catch (error) {
+    response.status(error?.status || 500).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to save Debug Bot configuration",
+    });
+  }
+});
+
+app.post("/api/debug-bot/config/test", async (request, response) => {
+  try {
+    const result = await testDebugBotLlmConnection(request.body ?? {}, {
+      queryFn: query,
+    });
+    response.json(result);
+  } catch (error) {
+    response.status(error?.status || 502).json({
+      ok: false,
+      error:
+        error instanceof Error ? error.message : "Model connection test failed",
+    });
+  }
+});
+
+app.get("/api/debug-bot/tools", (_request, response) => {
+  response.json({ tools: listDebugBotTools() });
+});
+
+app.post("/api/debug-bot/tool", async (request, response) => {
+  try {
+    const body = request.body ?? {};
+    if (typeof body.tool !== "string" || !body.tool.trim()) {
+      response.status(400).json({ ok: false, error: "Tool name is required" });
+      return;
+    }
+    const execution = await executeDebugBotTool(
+      body.tool.trim(),
+      body.arguments ?? {},
+      { queryFn: query },
+    );
+    response.status(execution.ok ? 200 : 502).json(execution);
+  } catch (error) {
+    response.status(error?.status || 500).json({
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to execute Debug Bot tool",
+    });
+  }
+});
+
+app.post("/api/debug-bot/chat", async (request, response) => {
+  try {
+    const body = request.body ?? {};
+    const { config } = await loadDebugBotConfig({ queryFn: query });
+    const result = await runDebugBotChat({
+      messages: body.messages,
+      language: body.language === "en" ? "en" : "zh",
+      config,
+      context: { queryFn: query },
+    });
+    response.json(result);
+  } catch (error) {
+    response.status(error?.status || 500).json({
+      error:
+        error instanceof Error ? error.message : "Debug Bot request failed",
+      code: error?.code || "DEBUG_BOT_CHAT_FAILED",
+    });
+  }
+});
+
 if (process.env.NODE_ENV === "production") {
   const frontendDirectory = fileURLToPath(new URL("../dist/", import.meta.url));
 
@@ -402,6 +523,37 @@ if (process.env.NODE_ENV === "production") {
   });
 }
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`PLC backend listening on http://localhost:${port}`);
+  recordDiagnosticEvent({
+    level: "info",
+    component: "server",
+    message: `Connector backend started on port ${port}`,
+  });
+  void restoreModbusPollersFromDatabase({ queryFn: query }).then((result) => {
+    if (result?.restored && result.summary) {
+      recordDiagnosticEvent({
+        level: result.summary.failed > 0 ? "warn" : "info",
+        component: "bootstrap",
+        message: `Auto-restored Modbus pollers from PostgreSQL (started=${result.summary.started}, failed=${result.summary.failed})`,
+      });
+    }
+  });
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}; closing PLC and MQTT connections...`);
+  server.close();
+  try {
+    await stopAllModbusPollers();
+    closeAllMqttClients();
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

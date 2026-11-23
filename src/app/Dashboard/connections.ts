@@ -24,7 +24,7 @@ type RescanResult = {
   connectionError?: string;
   supported: boolean;
 };
-const RESCAN_TIMEOUT_MS = 3000;
+const RESCAN_TIMEOUT_MS = 15000;
 
 export function readMqttSummary(): MqttSummary | null {
   const saved = readMqttConfig();

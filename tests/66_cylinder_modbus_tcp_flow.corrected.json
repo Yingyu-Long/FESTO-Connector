@@ -1,0 +1,171 @@
+[
+  {
+    "id": "50cba5a6082c4cbe",
+    "type": "tab",
+    "label": "66 Cylinder Modbus TCP Simulator",
+    "disabled": false,
+    "info": "66 cylinders, 58 Holding Registers each, HR 0..3827."
+  },
+  {
+    "id": "f2476683b603415a",
+    "type": "inject",
+    "z": "50cba5a6082c4cbe",
+    "name": "Update all cylinders (1s)",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "1",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "0.5",
+    "topic": "tick",
+    "payload": "",
+    "payloadType": "date",
+    "x": 190,
+    "y": 180,
+    "wires": [
+      [
+        "ed5f3fbd3f6749a0"
+      ]
+    ]
+  },
+  {
+    "id": "ac2ba6b378c54463",
+    "type": "inject",
+    "z": "50cba5a6082c4cbe",
+    "name": "Cylinder 05 -> SLOW x3",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "payload": "{\"cylinder_id\":5,\"cylinder_fault\":\"SLOW\",\"ratio\":3}",
+    "payloadType": "json",
+    "x": 200,
+    "y": 260,
+    "wires": [
+      [
+        "ed5f3fbd3f6749a0"
+      ]
+    ]
+  },
+  {
+    "id": "a694dcbe870440ff",
+    "type": "inject",
+    "z": "50cba5a6082c4cbe",
+    "name": "Cylinder 05 -> NORMAL",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "payload": "{\"cylinder_id\":5,\"cylinder_fault\":\"NORMAL\"}",
+    "payloadType": "json",
+    "x": 200,
+    "y": 320,
+    "wires": [
+      [
+        "ed5f3fbd3f6749a0"
+      ]
+    ]
+  },
+  {
+    "id": "e30b109cf9e84396",
+    "type": "inject",
+    "z": "50cba5a6082c4cbe",
+    "name": "Cylinder 20 -> SLOW x5",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "payload": "{\"cylinder_id\":20,\"cylinder_fault\":\"SLOW\",\"ratio\":5}",
+    "payloadType": "json",
+    "x": 200,
+    "y": 380,
+    "wires": [
+      [
+        "ed5f3fbd3f6749a0"
+      ]
+    ]
+  },
+  {
+    "id": "ed5f3fbd3f6749a0",
+    "type": "function",
+    "z": "50cba5a6082c4cbe",
+    "name": "Generate 66 cylinders / 3828 HR",
+    "func": "// =====================================================\n// 66-cylinder Modbus TCP simulator\n// Each cylinder = 58 Holding Registers\n// Total = 66 * 58 = 3828 registers (address 0..3827)\n//\n// Input:\n//   Timer inject: updates all cylinders every second\n//   Fault inject: msg.payload = {\n//       \"cylinder_id\": 5,\n//       \"cylinder_fault\": \"SLOW\" | \"NORMAL\",\n//       \"ratio\": 3\n//   }\n//\n// Register layout per cylinder (offset from cylinder base):\n//   0..3   timestamp_DI_IPos_ON       ULINT\n//   4..7   timestamp_DI_IPos_OFF      ULINT\n//   8..11  timestamp_DI_EPos_ON       ULINT\n//   12..15 timestamp_DI_EPos_OFF      ULINT\n//   16..19 timestamp_DO_MCtrl12_ON    ULINT\n//   20..23 timestamp_DO_MCtrl12_OFF   ULINT\n//   24..27 timestamp_DO_MCtrl14_ON    ULINT\n//   28..31 timestamp_DO_MCtrl14_OFF   ULINT\n//   32..33 udiCycleCounter            UDINT\n//   34..57 sPartnumber                STRING[48], 24 WORDs\n//\n// Data order: high WORD first (Big Endian).\n// STRING: 48 bytes, two ASCII/UTF-8 bytes per WORD, high byte first.\n// =====================================================\n\nconst CYLINDER_COUNT = 66;\nconst REG_PER_CYLINDER = 58;\nconst TOTAL_REGISTERS = CYLINDER_COUNT * REG_PER_CYLINDER;\n\nconst BASE = {\n    ipos_off: 15,\n    epos_on: 50,\n    ctrl: 65,\n    epos_off: 80,\n    ipos_on: 110\n};\n\n// ---------- Handle manual fault command ----------\nlet faults = flow.get(\"cylinder_faults\") || {};\n\nlet command = msg.payload;\nif (typeof command === \"string\") {\n    try { command = JSON.parse(command); } catch (e) {}\n}\n\nif (command && typeof command === \"object\" &&\n    command.cylinder_id !== undefined) {\n\n    const id = Number(command.cylinder_id);\n\n    if (Number.isInteger(id) && id >= 1 && id <= CYLINDER_COUNT) {\n        const requestedFault = String(command.cylinder_fault || \"NORMAL\").toUpperCase();\n        const ratio = Number(command.ratio);\n\n        faults[id] = {\n            fault: requestedFault === \"SLOW\" ? \"SLOW\" : \"NORMAL\",\n            ratio: Number.isFinite(ratio) && ratio > 0 ? ratio : 3\n        };\n\n        flow.set(\"cylinder_faults\", faults);\n    }\n}\n\n// ---------- Cycle counters ----------\nlet counters = flow.get(\"cylinder_counters\");\nif (!Array.isArray(counters) || counters.length !== CYLINDER_COUNT) {\n    counters = Array(CYLINDER_COUNT).fill(0);\n}\n\n// ---------- Helpers ----------\nfunction putU64(registers, start, value) {\n    // Date.now() is currently a safe integer; convert via string to BigInt.\n    let v = BigInt(String(Math.trunc(value)));\n    for (let word = 0; word < 4; word++) {\n        const shift = BigInt(48 - word * 16);\n        registers[start + word] = Number((v >> shift) & 0xFFFFn);\n    }\n}\n\nfunction putU32(registers, start, value) {\n    const v = BigInt(value) & 0xFFFFFFFFn;\n    registers[start] = Number((v >> 16n) & 0xFFFFn);\n    registers[start + 1] = Number(v & 0xFFFFn);\n}\n\nfunction putString48(registers, start, value) {\n    // Siemens STRING[48] in the supplied table is treated as 48 data bytes.\n    // Part numbers are ASCII, so one character = one byte.\n    const buf = Buffer.alloc(48, 0);\n    const source = Buffer.from(String(value), \"ascii\");\n    source.copy(buf, 0, 0, 48);\n\n    for (let i = 0; i < 24; i++) {\n        registers[start + i] = (buf[i * 2] << 8) | buf[i * 2 + 1];\n    }\n}\n\nfunction random0to5() {\n    return Math.floor(Math.random() * 6);\n}\n\n// ---------- Build 3828 Holding Registers ----------\nconst registers = new Array(TOTAL_REGISTERS).fill(0);\nconst now = Date.now();\n\nfor (let i = 0; i < CYLINDER_COUNT; i++) {\n    const cylinderId = i + 1;\n    const baseReg = i * REG_PER_CYLINDER;\n\n    counters[i] = (Number(counters[i]) || 0) + 1;\n\n    const config = faults[cylinderId] || { fault: \"NORMAL\", ratio: 3 };\n    const slow = config.fault === \"SLOW\";\n    const ratio = slow ? (Number(config.ratio) || 3) : 1;\n\n    const timestamps = {\n        timestamp_DI_IPos_ON:\n            now + Math.round(BASE.ipos_on * ratio) + random0to5(),\n\n        timestamp_DI_IPos_OFF:\n            now + Math.round(BASE.ipos_off * ratio) + random0to5(),\n\n        timestamp_DI_EPos_ON:\n            now + Math.round(BASE.epos_on * ratio) + random0to5(),\n\n        timestamp_DI_EPos_OFF:\n            now + Math.round(BASE.epos_off * ratio) + random0to5(),\n\n        timestamp_DO_MCtrl12_ON:\n            now + Math.round(BASE.ctrl * ratio),\n\n        timestamp_DO_MCtrl12_OFF:\n            now,\n\n        timestamp_DO_MCtrl14_ON:\n            now,\n\n        timestamp_DO_MCtrl14_OFF:\n            now + Math.round(BASE.ctrl * ratio)\n    };\n\n    let r = baseReg;\n\n    putU64(registers, r, timestamps.timestamp_DI_IPos_ON); r += 4;\n    putU64(registers, r, timestamps.timestamp_DI_IPos_OFF); r += 4;\n    putU64(registers, r, timestamps.timestamp_DI_EPos_ON); r += 4;\n    putU64(registers, r, timestamps.timestamp_DI_EPos_OFF); r += 4;\n    putU64(registers, r, timestamps.timestamp_DO_MCtrl12_ON); r += 4;\n    putU64(registers, r, timestamps.timestamp_DO_MCtrl12_OFF); r += 4;\n    putU64(registers, r, timestamps.timestamp_DO_MCtrl14_ON); r += 4;\n    putU64(registers, r, timestamps.timestamp_DO_MCtrl14_OFF); r += 4;\n\n    putU32(registers, r, counters[i]); r += 2;\n\n    const partNumber = \"CYL-\" + String(cylinderId).padStart(3, \"0\");\n    putString48(registers, r, partNumber);\n}\n\nflow.set(\"cylinder_counters\", counters);\n\nconst slowCount = Object.keys(faults)\n    .filter(id => faults[id] && faults[id].fault === \"SLOW\").length;\n\nnode.status({\n    fill: slowCount > 0 ? \"yellow\" : \"green\",\n    shape: \"dot\",\n    text: `${CYLINDER_COUNT} cylinders | ${slowCount} slow faults | ${TOTAL_REGISTERS} HR`\n});\n\n// Flex Server's holding-register buffer uses an 8-byte slot per register.\n// Place each 16-bit value (high byte first) at the start of its slot.\n// Passing `registers` directly would truncate each word to one byte and pack\n// the values at the wrong offsets.\nconst flexBytes = new Array(TOTAL_REGISTERS * 8).fill(0);\nfor (let i = 0; i < registers.length; i++) {\n    const value = registers[i] & 0xFFFF;\n    const offset = i * 8;\n    flexBytes[offset] = (value >> 8) & 0xFF;\n    flexBytes[offset + 1] = value & 0xFF;\n}\n\nmsg.payload = {\n    value: flexBytes,\n    register: \"holding\",\n    address: 0,\n    disableMsgOutput: 1\n};\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 570,
+    "y": 260,
+    "wires": [
+      [
+        "6b1f782ed5e24823"
+      ]
+    ]
+  },
+  {
+    "id": "6b1f782ed5e24823",
+    "type": "modbus-flex-server",
+    "z": "50cba5a6082c4cbe",
+    "name": "Modbus TCP Server (Unit ID 1)",
+    "logEnabled": false,
+    "serverAddress": "0.0.0.0",
+    "serverPort": 1502,
+    "responseDelay": 10,
+    "unitId": 1,
+    "delayUnit": "ms",
+    "coilsBufferSize": 20000,
+    "registersBufferSize": 20000,
+    "minAddress": 0,
+    "splitAddress": 10000,
+    "funcGetCoil": "function getFlexCoil(addr, unitID) {\n    if (unitID === node.unitId &&\n        addr >= node.minAddress &&\n        addr <= node.splitAddress) {\n        return node.coils.readUInt8(addr * node.bufferFactor);\n    }\n}",
+    "funcGetDiscreteInput": "function getFlexDiscreteInput(addr, unitID) {\n    addr += node.splitAddress;\n    if (unitID === node.unitId &&\n        addr >= node.splitAddress &&\n        addr <= node.splitAddress * 2) {\n        return node.coils.readUInt8(addr * node.bufferFactor);\n    }\n}",
+    "funcGetInputRegister": "function getFlexInputRegister(addr, unitID) {\n    if (unitID === node.unitId &&\n        addr >= node.minAddress &&\n        addr <= node.splitAddress) {\n        return node.registers.readUInt16BE(addr * node.bufferFactor);\n    }\n}",
+    "funcGetHoldingRegister": "function getFlexHoldingRegister(addr, unitID) {\n    addr += node.splitAddress;\n    if (unitID === node.unitId &&\n        addr >= node.splitAddress &&\n        addr <= node.splitAddress * 2) {\n        return node.registers.readUInt16BE(addr * node.bufferFactor);\n    }\n}",
+    "funcSetCoil": "function setFlexCoil(addr, value, unitID) {\n    if (unitID === node.unitId &&\n        addr >= node.minAddress &&\n        addr <= node.splitAddress) {\n        node.coils.writeUInt8(value, addr * node.bufferFactor);\n    }\n}",
+    "funcSetRegister": "function setFlexRegister(addr, value, unitID) {\n    addr += node.splitAddress;\n    if (unitID === node.unitId &&\n        addr >= node.splitAddress &&\n        addr <= node.splitAddress * 2) {\n        node.registers.writeUInt16BE(value, addr * node.bufferFactor);\n    }\n}",
+    "showErrors": true,
+    "x": 900,
+    "y": 260,
+    "wires": [
+      [],
+      [],
+      [],
+      []
+    ]
+  },
+  {
+    "id": "64c24caf79db4715",
+    "type": "comment",
+    "z": "50cba5a6082c4cbe",
+    "name": "HR 0-3827 | 66 x 58 registers | FC03 max 125 per request",
+    "info": "Install node-red-contrib-modbus. Server listens on TCP port 1502 by default. Change serverPort to 502 if required and permitted by OS/container. Each cylinder has 58 registers. Data is high WORD first. STRING[48] is treated as 48 data bytes per the supplied table.",
+    "x": 500,
+    "y": 100,
+    "wires": []
+  }
+]

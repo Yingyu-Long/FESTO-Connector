@@ -9,31 +9,36 @@ import Opcua from "./app/Add/Opcua";
 import Beckhoff from "./app/Add/Beckhoff";
 import Modbus from "./app/Add/Modbus";
 import Mqtt from "./app/Add/Mqtt";
+import DebugBot from "./app/DebugBot/DebugBot";
+import { UnifiedAppShell } from "./app/AppLayout";
 
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/status" element={<Dashboard />} />
-        <Route path="/import" element={<Dashboard />} />
-        <Route path="/downloads" element={<Dashboard />} />
-        <Route path="/add" element={<Add />} />
-        <Route path="/add/siemens" element={<Siemens />} />
-        <Route path="/add/rockwell" element={<Rockwell />} />
-        <Route path="/add/opcua" element={<Opcua />} />
-        <Route path="/add/beckhoff" element={<Beckhoff />} />
-        <Route path="/add/modbus" element={<Modbus />} />
-        <Route path="/add/modbus-customised" element={<Modbus />} />
-        <Route path="/mqtt" element={<Mqtt />} />
-        <Route path="/siemens" element={<Siemens />} />
-        <Route path="/rockwell" element={<Rockwell />} />
-        <Route path="/opcua" element={<Opcua />} />
-        <Route path="/beckhoff" element={<Beckhoff />} />
-        <Route path="/modbus" element={<Modbus />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <UnifiedAppShell>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/status" element={<Dashboard />} />
+          <Route path="/import" element={<Dashboard />} />
+          <Route path="/debug-bot" element={<DebugBot />} />
+          <Route path="/downloads" element={<Dashboard />} />
+          <Route path="/add" element={<Add />} />
+          <Route path="/add/siemens" element={<Siemens />} />
+          <Route path="/add/rockwell" element={<Rockwell />} />
+          <Route path="/add/opcua" element={<Opcua />} />
+          <Route path="/add/beckhoff" element={<Beckhoff />} />
+          <Route path="/add/modbus" element={<Modbus />} />
+          <Route path="/add/modbus-customised" element={<Modbus />} />
+          <Route path="/mqtt" element={<Mqtt />} />
+          <Route path="/siemens" element={<Siemens />} />
+          <Route path="/rockwell" element={<Rockwell />} />
+          <Route path="/opcua" element={<Opcua />} />
+          <Route path="/beckhoff" element={<Beckhoff />} />
+          <Route path="/modbus" element={<Modbus />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </UnifiedAppShell>
     </BrowserRouter>
   );
 }

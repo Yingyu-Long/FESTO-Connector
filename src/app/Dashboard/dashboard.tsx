@@ -6,6 +6,7 @@ import {
 } from "@festo-ui/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AppFooter, AppHeader } from "../AppLayout";
+import { useAppShell } from "../appShellContext";
 import { connectionKey, readSavedConnections, storeConnections } from "../storage";
 import type { SavedConnection } from "../storage";
 import ImportPage from "../Import";
@@ -66,18 +67,20 @@ function Action({
 function ConnectionStatus({
   status,
   error,
+  zh,
 }: {
   status: SavedConnection["status"] | "checking" | "unavailable";
   error?: string;
+  zh: boolean;
 }) {
   if (status === "checking") {
-    return <span className="fwe-status">Checking...</span>;
+    return <span className="fwe-status">{zh ? "检查中..." : "Checking..."}</span>;
   }
   if (status === "connected") {
     return (
       <span className="fwe-status fwe-status-connected">
         <IconCheckStatus aria-hidden="true" />
-        Connected
+        {zh ? "已连接" : "Connected"}
       </span>
     );
   }
@@ -85,12 +88,20 @@ function ConnectionStatus({
   return (
     <span className="fwe-status" title={error}>
       <IconFailure aria-hidden="true" />
-      {status === "unavailable" ? "Status unavailable" : "Disconnected"}
+      {status === "unavailable"
+        ? zh
+          ? "状态不可用"
+          : "Status unavailable"
+        : zh
+          ? "未连接"
+          : "Disconnected"}
     </span>
   );
 }
 
 export default function Dashboard() {
+  const { language } = useAppShell();
+  const zh = language === "zh";
   const { pathname } = useLocation();
   const page = pathname === "/import" ? "Import" : "Status";
   const [asset, setAsset] = useState<"MIP" | "ENI" | "MIE">("MIP");
@@ -275,11 +286,11 @@ export default function Dashboard() {
           <div className="fwe-layout">
             <section className="fwe-status-list">
               <div className="fwe-section-heading">
-                <h1>PLC Connections</h1>
+                <h1>{zh ? "PLC 连接列表" : "PLC Connections"}</h1>
                 <div className="fwe-actions">
                   <Action
                     icon={<IconRefresh aria-hidden="true" />}
-                    label="Refresh"
+                    label={zh ? "刷新" : "Refresh"}
                     onClick={async () => {
                       try {
                         const configuration = await loadConfiguration();
@@ -293,33 +304,35 @@ export default function Dashboard() {
                         }
                         setConnections(readSavedConnections());
                         setMqttSummary(readMqttSummary());
-                        notify("Configuration refreshed");
+                        notify(zh ? "配置已刷新" : "Configuration refreshed");
                       } catch (error) {
                         notify(
                           error instanceof Error
                             ? error.message
-                            : "Unable to refresh configuration",
+                            : zh
+                              ? "无法刷新配置"
+                              : "Unable to refresh configuration",
                         );
                       }
                     }}
                   />
                   <Action
                     icon={<IconExport aria-hidden="true" />}
-                    label="Export"
+                    label={zh ? "导出" : "Export"}
                     onClick={() => {
                       downloadConfiguration(connections);
-                      notify("Configuration exported");
+                      notify(zh ? "配置已导出" : "Configuration exported");
                     }}
                   />
                   <Action
                     icon={<IconReinitialize aria-hidden="true" />}
-                    label="Rescan"
+                    label={zh ? "重连扫描" : "Rescan"}
                     loading={rescanningKeys.length > 0}
                     onClick={() => void rescanConnections(connections)}
                   />
                   <Action
                     icon={<IconAdd aria-hidden="true" />}
-                    label="Add PLC"
+                    label={zh ? "添加 PLC" : "Add PLC"}
                     primary
                     onClick={() => navigate("/add")}
                   />
@@ -331,18 +344,20 @@ export default function Dashboard() {
                     <tr>
                       <th className="fwe-icon-cell" />
                       <th>Id</th>
-                      <th>Protocol</th>
-                      <th>Host</th>
-                      <th>Port</th>
-                      <th>Connection details</th>
-                      <th>Status</th>
+                      <th>{zh ? "协议" : "Protocol"}</th>
+                      <th>{zh ? "主机" : "Host"}</th>
+                      <th>{zh ? "端口" : "Port"}</th>
+                      <th>{zh ? "连接详情" : "Connection details"}</th>
+                      <th>{zh ? "状态" : "Status"}</th>
                       <th className="fwe-menu-cell" />
                     </tr>
                   </thead>
                   <tbody>
                     {connections.length === 0 && (
                       <tr>
-                        <td colSpan={8}>No PLC connections configured.</td>
+                        <td colSpan={8}>
+                          {zh ? "尚未配置 PLC 连接。" : "No PLC connections configured."}
+                        </td>
                       </tr>
                     )}
                     {connections.map((connection, index) => {
@@ -386,6 +401,7 @@ export default function Dashboard() {
                               <ConnectionStatus
                                 status={status}
                                 error={error}
+                                zh={zh}
                               />
                             </td>
                             <td className="fwe-menu-cell">
@@ -482,7 +498,7 @@ export default function Dashboard() {
                 </table>
               </div>
               <div className="fwe-section-heading fwe-mqtt-heading">
-                <h2>MQTT Connection</h2>
+                <h2>{zh ? "MQTT 连接" : "MQTT Connection"}</h2>
               </div>
               <div className="fwe-table-scroll">
                 <table className="fwe-table fwe-mqtt-table">
@@ -491,7 +507,7 @@ export default function Dashboard() {
                       <th className="fwe-icon-cell" />
                       <th>Id</th>
                       <th>URI</th>
-                      <th>Status</th>
+                      <th>{zh ? "状态" : "Status"}</th>
                       <th className="fwe-menu-cell" />
                     </tr>
                   </thead>
@@ -502,11 +518,14 @@ export default function Dashboard() {
                       <td>
                         {mqttSummary
                           ? `${mqttSummary.protocol}${mqttSummary.host}:${mqttSummary.port}`
-                          : "Not configured"}
+                          : zh
+                            ? "未配置"
+                            : "Not configured"}
                       </td>
                       <td>
                         <ConnectionStatus
                           status={mqttSummary?.status ?? "disconnected"}
+                          zh={zh}
                         />
                       </td>
                       <td className="fwe-menu-cell">

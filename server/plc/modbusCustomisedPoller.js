@@ -12,5 +12,5 @@ function integratedConfig(rawConfig) {
 }
 export const getCustomisedModbusPollerStatus = (id) => getModbusPollerStatus(id, "customised");
 export const stopCustomisedModbusPoller = (id) => stopModbusPoller(id, "customised");
-export const startCustomisedModbusPoller = async (config) => startModbusPoller(integratedConfig(config), "customised");
+export const startCustomisedModbusPoller = async (config, options) => startModbusPoller(integratedConfig(config), "customised", options);
 export const testCustomisedModbusPollerConnection = async (config) => testModbusPollerConnection(integratedConfig(config));
