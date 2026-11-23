@@ -8,6 +8,7 @@ import {
 } from "../server/debugBot/configStore.js";
 import {
   computeCylinderCycleMetrics,
+  diagnoseMqttBrokerBacklog,
   getSystemRuntimeHealth,
   inspectModbusDatablocks,
   subscribeConnectorMqtt,
@@ -270,7 +271,7 @@ test("Debug Bot audits Connector config, tests connectivity, samples MQTT with t
 });
 
 test("Debug Bot executes multi-step OpenAI tool-calling loop across Connector skills", async () => {
-  assert.equal(listDebugBotTools().length, 6);
+  assert.equal(listDebugBotTools().length, 7);
 
   const queryFn = async () => ({ rows: [], rowCount: 0 });
   let calls = 0;
@@ -354,4 +355,125 @@ test("Debug Bot executes multi-step OpenAI tool-calling loop across Connector sk
   const unknown = await executeDebugBotTool("does_not_exist", {}, { queryFn });
   assert.equal(unknown.ok, false);
   assert.match(unknown.error, /Unknown Debug Bot tool/);
+});
+
+test("Debug Bot diagnoses MQTT broker backlog via $SYS metrics, publisher backpressure, and loopback probe", async () => {
+  const savedConfig = {
+    id: "cfg-backlog",
+    mqttMessageHandler: {
+      clientId: "edge-1",
+      uri: "tcp://10.0.0.50:1883",
+      qos: 1,
+    },
+    messageSources: [],
+  };
+  const queryFn = async () => ({
+    rows: [{ id: savedConfig.id, updated_at: new Date(), configuration: savedConfig }],
+    rowCount: 1,
+  });
+
+  // Case 1: Broker with queued backlog, dropped messages, and offline persistent sessions
+  const createMockMqtt = (sysPayloads) => () => {
+    const emitter = new EventEmitter();
+    emitter.subscribe = (topic, _opts, cb) => {
+      cb?.(null, [{ topic, qos: 0 }]);
+      if (topic === "$SYS/#") {
+        setTimeout(() => {
+          for (const [k, v] of Object.entries(sysPayloads)) {
+            emitter.emit("message", k, Buffer.from(String(v)));
+          }
+        }, 10);
+      }
+    };
+    emitter.publish = (topic, msg, _opts, cb) => {
+      setTimeout(() => {
+        cb?.(null);
+        emitter.emit("message", topic, Buffer.from(msg));
+      }, 15);
+    };
+    emitter.end = () => {};
+    setTimeout(() => emitter.emit("connect"), 5);
+    return emitter;
+  };
+
+  const backlogResult = await diagnoseMqttBrokerBacklog({
+    queryFn,
+    args: { duration_seconds: 1, include_loopback_probe: true },
+    mqttConnect: createMockMqtt({
+      "$SYS/broker/version": "mosquitto version 2.0.18",
+      "$SYS/broker/store/messages/count": "540",
+      "$SYS/broker/retained messages/count": "40",
+      "$SYS/broker/publish/messages/dropped": "12",
+      "$SYS/broker/clients/connected": "3",
+      "$SYS/broker/clients/disconnected": "2",
+      "$SYS/broker/load/publish/received/1min": "600.0",
+      "$SYS/broker/load/publish/sent/1min": "80.0",
+    }),
+    getPublisherStats: () => ({
+      inFlightCount: 0,
+      maxInFlightCount: 2,
+      totalPublished: 500,
+      totalErrors: 0,
+      totalTimeouts: 0,
+      avgPublishLatencyMs: 6,
+      p95PublishLatencyMs: 10,
+      maxPublishLatencyMs: 14,
+      lastPublishLatencyMs: 5,
+      recentPublishRatePerSec: 10,
+      activeClientCount: 1,
+      connectedClientCount: 1,
+      totalOutgoingBufferBytes: 0,
+      lastPublishAt: new Date().toISOString(),
+      lastErrorAt: null,
+      lastErrorMessage: null,
+    }),
+  });
+
+  assert.equal(backlogResult.ok, true);
+  assert.equal(backlogResult.status, "BACKLOG_DETECTED");
+  assert.equal(backlogResult.sysMetrics.estimatedQueuedMessages, 500);
+  assert.equal(backlogResult.sysMetrics.droppedMessages, 12);
+  assert.equal(backlogResult.sysMetrics.disconnectedClients, 2);
+  assert.equal(backlogResult.loopbackProbe.ok, true);
+  assert.ok(backlogResult.findings.some((f) => f.includes("500")));
+  assert.ok(backlogResult.findings.some((f) => f.includes("12 dropped")));
+
+  // Case 2: Healthy broker (stored == retained => 0 queued backlog)
+  const healthyResult = await diagnoseMqttBrokerBacklog({
+    queryFn,
+    args: { duration_seconds: 1, include_loopback_probe: true },
+    mqttConnect: createMockMqtt({
+      "$SYS/broker/version": "mosquitto version 2.0.18",
+      "$SYS/broker/store/messages/count": "38",
+      "$SYS/broker/retained messages/count": "38",
+      "$SYS/broker/publish/messages/dropped": "0",
+      "$SYS/broker/clients/connected": "4",
+      "$SYS/broker/clients/disconnected": "0",
+      "$SYS/broker/load/publish/received/1min": "120.0",
+      "$SYS/broker/load/publish/sent/1min": "120.0",
+    }),
+    getPublisherStats: () => ({
+      inFlightCount: 0,
+      maxInFlightCount: 1,
+      totalPublished: 120,
+      totalErrors: 0,
+      totalTimeouts: 0,
+      avgPublishLatencyMs: 4,
+      p95PublishLatencyMs: 6,
+      maxPublishLatencyMs: 8,
+      lastPublishLatencyMs: 4,
+      recentPublishRatePerSec: 2,
+      activeClientCount: 1,
+      connectedClientCount: 1,
+      totalOutgoingBufferBytes: 0,
+      lastPublishAt: new Date().toISOString(),
+      lastErrorAt: null,
+      lastErrorMessage: null,
+    }),
+  });
+
+  assert.equal(healthyResult.ok, true);
+  assert.equal(healthyResult.status, "HEALTHY");
+  assert.equal(healthyResult.sysMetrics.estimatedQueuedMessages, 0);
+  assert.equal(healthyResult.loopbackProbe.ok, true);
 });

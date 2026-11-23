@@ -1,5 +1,6 @@
 import { query as defaultQuery } from "../database.js";
 import {
+  diagnoseMqttBrokerBacklog,
   diagnoseOpcuaAndSiemens,
   getSystemRuntimeHealth,
   inspectModbusDatablocks,
@@ -36,6 +37,31 @@ export const DEBUG_BOT_TOOLS = [
           minimum: 1,
           maximum: 200,
           description: "Maximum messages to capture before stopping early (default 70).",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "diagnose_mqtt_broker_backlog",
+    category: "mqtt",
+    summaryEn: "Detect MQTT broker message backlog via $SYS metrics, Connector PUBACK backpressure, and loopback latency.",
+    summaryZh: "诊断 MQTT Broker 是否消息堆积：采集 $SYS 队列/丢包/离线会话指标、发送端背压及环回延迟。",
+    description:
+      "Diagnose whether MQTT messages are piling up or congested at the broker by combining three live checks: (1) Broker $SYS/# metrics (stored/queued messages excluding retained, dropped messages, disconnected persistent sessions, 1m ingress vs egress rates for Mosquitto/EMQX), (2) Connector publisher backpressure telemetry (in-flight QoS publishes, PUBACK latency, timeouts, socket buffer bytes), and (3) an optional non-retained QoS 1 loopback latency probe.",
+    parameters: {
+      type: "object",
+      properties: {
+        duration_seconds: {
+          type: "integer",
+          minimum: 1,
+          maximum: 8,
+          description: "How many seconds to listen for Broker $SYS/# metrics (1–8, default 2).",
+        },
+        include_loopback_probe: {
+          type: "boolean",
+          description:
+            "Whether to publish a temporary non-retained QoS 1 probe on festo/connector/debug-probe/* to measure PUBACK and round-trip latency (default true).",
         },
       },
       additionalProperties: false,
@@ -153,6 +179,7 @@ export async function executeDebugBotTool(toolName, args = {}, context = {}) {
   const {
     queryFn = defaultQuery,
     mqttConnect,
+    getPublisherStats,
     probeTcp,
     testModbus,
     testMqtt,
@@ -170,6 +197,13 @@ export async function executeDebugBotTool(toolName, args = {}, context = {}) {
         queryFn,
         args: args ?? {},
         ...(mqttConnect ? { mqttConnect } : {}),
+      });
+    } else if (toolName === "diagnose_mqtt_broker_backlog") {
+      result = await diagnoseMqttBrokerBacklog({
+        queryFn,
+        args: args ?? {},
+        ...(mqttConnect ? { mqttConnect } : {}),
+        ...(getPublisherStats ? { getPublisherStats } : {}),
       });
     } else if (toolName === "inspect_modbus_datablocks") {
       result = inspectModbusDatablocks({
@@ -226,11 +260,12 @@ function buildSystemPrompt(language = "zh", customPrompt = "") {
   const basePrompt = `You are Debug Bot, the embedded industrial PLC & MQTT diagnostics assistant inside FESTO Connector.
 You have live, read-only diagnostic skills covering the full Connector pipeline:
 1. subscribe_connector_mqtt: Subscribe to the configured MQTT broker & topics for live payload sampling, publish throughput, and 6-timestamp cylinder cycle verification (t1..t4 durations).
-2. inspect_modbus_datablocks: Read all live in-memory datablocks across active Modbus pollers (any number of cylinders, no fixed cap) and measure how long each cylinder has gone without updating data (stale duration, last data update time, never-updated status, update count).
-3. validate_connector_configuration: Audit the saved configuration for register overflow (>65535), FC03 batch count vs polling interval bottlenecks, overlapping register ranges, and duplicate/invalid MQTT topics.
-4. test_plc_and_mqtt_connectivity: Run live protocol handshakes (Modbus read, OPC UA connect, MQTT connect) with TCP vs protocol latency breakdown.
-5. get_system_runtime_health: Check PostgreSQL health, Node.js uptime/memory, active pollers, and recent backend diagnostic error events.
-6. diagnose_opcua_and_siemens: Inspect Siemens S7 MIP pollers and OPC UA subscriptions (with optional node browsing).
+2. diagnose_mqtt_broker_backlog: Diagnose whether MQTT messages are piling up / congested at the Broker by inspecting $SYS/# queue/drop/disconnected-session/rate metrics, Connector publisher PUBACK backpressure & socket buffer, and a QoS 1 loopback latency probe.
+3. inspect_modbus_datablocks: Read all live in-memory datablocks across active Modbus pollers (any number of cylinders, no fixed cap) and measure how long each cylinder has gone without updating data (stale duration, last data update time, never-updated status, update count).
+4. validate_connector_configuration: Audit the saved configuration for register overflow (>65535), FC03 batch count vs polling interval bottlenecks, overlapping register ranges, and duplicate/invalid MQTT topics.
+5. test_plc_and_mqtt_connectivity: Run live protocol handshakes (Modbus read, OPC UA connect, MQTT connect) with TCP vs protocol latency breakdown.
+6. get_system_runtime_health: Check PostgreSQL health, Node.js uptime/memory, active pollers, and recent backend diagnostic error events.
+7. diagnose_opcua_and_siemens: Inspect Siemens S7 MIP pollers and OPC UA subscriptions (with optional node browsing).
 
 Domain knowledge for Festo Pneumatic Cylinder Datablocks (58 Holding Registers each):
 - The 4 characteristic stroke durations computed from 6 key timestamps are:

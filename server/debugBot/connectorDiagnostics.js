@@ -1,7 +1,7 @@
 import net from "node:net";
 import mqtt from "mqtt";
 import { query as defaultQuery } from "../database.js";
-import { testMqttConnection } from "../mqttPublisher.js";
+import { getMqttPublisherStats, testMqttConnection } from "../mqttPublisher.js";
 import {
   extractModbusSourcesFromConfiguration,
   extractMqttConfigFromConfiguration,
@@ -1138,4 +1138,511 @@ export async function diagnoseOpcuaAndSiemens({
     siemens,
     opcua,
   };
+}
+
+// =====================================================================
+// SKILL 7: diagnose_mqtt_broker_backlog (Broker $SYS queue, backpressure & loopback)
+// =====================================================================
+function parseSysNumeric(rawText) {
+  const match = String(rawText ?? "").trim().match(/^-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const num = Number(match[0]);
+  return Number.isFinite(num) ? num : null;
+}
+
+function summarizeSysMetrics(sysMap) {
+  const summary = {
+    brokerVersion: null,
+    uptime: null,
+    storedMessages: null,
+    retainedMessages: null,
+    queuedMessages: null,
+    estimatedQueuedMessages: null,
+    storedBytes: null,
+    droppedMessages: null,
+    droppedNoSubscribers: null,
+    droppedRate1m: null,
+    connectedClients: null,
+    disconnectedClients: null,
+    totalClients: null,
+    sessionsCount: null,
+    subscriptionsCount: null,
+    receivedRate1m: null,
+    sentRate1m: null,
+    publishReceivedRate1m: null,
+    publishSentRate1m: null,
+    totalReceived: null,
+    totalSent: null,
+  };
+
+  const addValue = (key, value) => {
+    if (value === null) return;
+    summary[key] = summary[key] === null ? value : summary[key] + value;
+  };
+
+  const rawSample = {};
+  for (const [topic, raw] of sysMap.entries()) {
+    const lower = topic.toLowerCase();
+    const num = parseSysNumeric(raw);
+
+    if (
+      lower === "$sys/broker/version" ||
+      /^\$sys\/brokers\/[^/]+\/(?:version|sysdescr)$/.test(lower)
+    ) {
+      if (!summary.brokerVersion) summary.brokerVersion = raw;
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/uptime" ||
+      /^\$sys\/brokers\/[^/]+\/uptime$/.test(lower)
+    ) {
+      if (!summary.uptime) summary.uptime = raw;
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/store/messages/count" ||
+      lower === "$sys/broker/messages/stored"
+    ) {
+      if (num !== null) summary.storedMessages = num;
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/store/messages/bytes") {
+      if (num !== null) summary.storedBytes = num;
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/retained messages/count" ||
+      /^\$sys\/brokers\/[^/]+\/(?:stats\/retained\/count|metrics\/messages\/retained)$/.test(lower)
+    ) {
+      addValue("retainedMessages", num);
+      rawSample[topic] = raw;
+    } else if (
+      /^\$sys\/brokers\/[^/]+\/metrics\/messages\/(?:queued|delayed)$/.test(lower) ||
+      /\/(?:mqueue|queued|inflight)(?:\/count)?$/.test(lower)
+    ) {
+      addValue("queuedMessages", num);
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/publish/messages/dropped" ||
+      /^\$sys\/brokers\/[^/]+\/metrics\/messages\/dropped(?:\/(?:expired|queue_purge|await_pubrel_timeout))?$/.test(
+        lower,
+      )
+    ) {
+      addValue("droppedMessages", num);
+      rawSample[topic] = raw;
+    } else if (/^\$sys\/brokers\/[^/]+\/metrics\/messages\/dropped\/no_subscribers$/.test(lower)) {
+      addValue("droppedNoSubscribers", num);
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/load/publish/dropped/1min") {
+      if (num !== null) summary.droppedRate1m = num;
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/clients/connected" ||
+      /^\$sys\/brokers\/[^/]+\/stats\/clients\/count$/.test(lower)
+    ) {
+      addValue("connectedClients", num);
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/clients/disconnected") {
+      if (num !== null) summary.disconnectedClients = num;
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/clients/total") {
+      if (num !== null) summary.totalClients = num;
+      rawSample[topic] = raw;
+    } else if (/^\$sys\/brokers\/[^/]+\/stats\/sessions\/count$/.test(lower)) {
+      addValue("sessionsCount", num);
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/subscriptions/count" ||
+      /^\$sys\/brokers\/[^/]+\/stats\/subscriptions\/count$/.test(lower)
+    ) {
+      addValue("subscriptionsCount", num);
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/load/messages/received/1min") {
+      if (num !== null) summary.receivedRate1m = num;
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/load/messages/sent/1min") {
+      if (num !== null) summary.sentRate1m = num;
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/load/publish/received/1min") {
+      if (num !== null) summary.publishReceivedRate1m = num;
+      rawSample[topic] = raw;
+    } else if (lower === "$sys/broker/load/publish/sent/1min") {
+      if (num !== null) summary.publishSentRate1m = num;
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/messages/received" ||
+      /^\$sys\/brokers\/[^/]+\/metrics\/messages\/received$/.test(lower)
+    ) {
+      addValue("totalReceived", num);
+      rawSample[topic] = raw;
+    } else if (
+      lower === "$sys/broker/messages/sent" ||
+      /^\$sys\/brokers\/[^/]+\/metrics\/messages\/sent$/.test(lower)
+    ) {
+      addValue("totalSent", num);
+      rawSample[topic] = raw;
+    }
+  }
+
+  // Mosquitto's store/messages/count includes retained messages; subtract retained to estimate actual queued backlog.
+  if (summary.queuedMessages !== null) {
+    summary.estimatedQueuedMessages = Math.max(0, Math.round(summary.queuedMessages));
+  } else if (summary.storedMessages !== null) {
+    summary.estimatedQueuedMessages = Math.max(
+      0,
+      Math.round(summary.storedMessages - (summary.retainedMessages ?? 0)),
+    );
+  }
+
+  // EMQX exposes total sessions vs connected clients; excess sessions are offline persistent sessions.
+  if (
+    summary.disconnectedClients === null &&
+    summary.sessionsCount !== null &&
+    summary.connectedClients !== null
+  ) {
+    summary.disconnectedClients = Math.max(0, Math.round(summary.sessionsCount - summary.connectedClients));
+  }
+
+  // Include extra $SYS entries up to 40 total if rawSample is still short.
+  if (Object.keys(rawSample).length < 40) {
+    for (const [topic, raw] of sysMap.entries()) {
+      if (Object.keys(rawSample).length >= 40) break;
+      if (!(topic in rawSample)) rawSample[topic] = raw;
+    }
+  }
+
+  return {
+    available: sysMap.size > 0,
+    topicCount: sysMap.size,
+    ...summary,
+    rawSample,
+  };
+}
+
+export async function diagnoseMqttBrokerBacklog({
+  queryFn = defaultQuery,
+  args = {},
+  mqttConnect = mqtt.connect,
+  getPublisherStats = getMqttPublisherStats,
+} = {}) {
+  const saved = await loadSavedConnectorConfiguration(queryFn);
+  const savedMqtt = saved?.configuration
+    ? extractMqttConfigFromConfiguration(saved.configuration)
+    : null;
+
+  const brokerConfig = {
+    protocol: args.protocol || savedMqtt?.protocol || "tcp://",
+    host: String(args.host || savedMqtt?.host || "").trim(),
+    port: Number(args.port || savedMqtt?.port || 1883),
+    username: args.username !== undefined ? args.username : (savedMqtt?.username ?? undefined),
+    password: args.password !== undefined ? args.password : (savedMqtt?.password ?? undefined),
+  };
+
+  const publisherBackpressure = getPublisherStats();
+
+  if (!brokerConfig.host) {
+    return {
+      ok: false,
+      connected: false,
+      status: "UNREACHABLE",
+      error: "No MQTT broker host is configured in Connector and none was provided in tool arguments.",
+      publisherBackpressure,
+      diagnosis: "Configure an MQTT Broker on the Dashboard -> MQTT Connection page first.",
+      findings: ["MQTT broker host is not configured."],
+      recommendations: ["Configure the MQTT broker address and credentials in Dashboard -> MQTT Connection."],
+    };
+  }
+
+  const durationSeconds = clamp(args.duration_seconds ?? args.durationSeconds, 2, 1, 8);
+  const includeLoopbackProbe = args.include_loopback_probe !== false;
+  const brokerUrl = getMqttBrokerUrl(brokerConfig);
+  const connectTimeoutMs = 4000;
+  const startedAt = Date.now();
+  const probeId = Math.random().toString(16).slice(2, 10);
+  const probeTopic = `festo/connector/debug-probe/${probeId}`;
+
+  return new Promise((resolve) => {
+    const client = mqttConnect(brokerUrl, {
+      clientId: `debug-bot-backlog-${probeId}`,
+      username: brokerConfig.username || undefined,
+      password: brokerConfig.password || undefined,
+      connectTimeout: connectTimeoutMs,
+      reconnectPeriod: 0,
+      clean: true,
+    });
+
+    let settled = false;
+    let connectedAt = null;
+    let connectTimer = null;
+    let samplingTimer = null;
+    let sysSubscribeDenied = false;
+    const sysMap = new Map();
+
+    const loopbackProbe = {
+      enabled: includeLoopbackProbe,
+      ok: false,
+      topic: includeLoopbackProbe ? probeTopic : null,
+      pubackLatencyMs: null,
+      roundTripLatencyMs: null,
+      error: null,
+    };
+    let probeSentAt = null;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (connectTimer) clearTimeout(connectTimer);
+      if (samplingTimer) clearTimeout(samplingTimer);
+      try {
+        client.end(true);
+      } catch {
+        // Ignore cleanup errors.
+      }
+      resolve(result);
+    };
+
+    const buildDiagnosis = () => {
+      const sysMetrics = summarizeSysMetrics(sysMap);
+      const findings = [];
+      const recommendations = [];
+      let backlogDetected = false;
+      let hasWarning = false;
+
+      // 1. Evaluate Broker $SYS queue / dropped / rate / offline session indicators
+      if (!sysMetrics.available) {
+        hasWarning = true;
+        findings.push(
+          sysSubscribeDenied
+            ? "Broker rejected subscription to $SYS/# (ACL restricted); unable to read internal broker queue counters directly."
+            : `No $SYS/# telemetry received from broker within ${durationSeconds}s ($SYS may be disabled, interval > ${durationSeconds}s, or restricted by ACL).`,
+        );
+        recommendations.push(
+          "If using Mosquitto/EMQX, allow read access to $SYS/# for the Connector diagnostic account (or inspect Broker dashboard / management API) to view per-client queue depth.",
+        );
+      } else {
+        if (sysMetrics.estimatedQueuedMessages !== null && sysMetrics.estimatedQueuedMessages >= 100) {
+          backlogDetected = true;
+          findings.push(
+            `Broker has ~${sysMetrics.estimatedQueuedMessages} non-retained messages queued in store (stored=${sysMetrics.storedMessages}, retained=${sysMetrics.retainedMessages ?? 0}).`,
+          );
+          recommendations.push(
+            "Check downstream MQTT consumers: a slow or offline persistent subscriber (cleanSession=false) is causing messages to pile up on the broker.",
+          );
+        } else if (sysMetrics.estimatedQueuedMessages !== null && sysMetrics.estimatedQueuedMessages > 0) {
+          hasWarning = true;
+          findings.push(
+            `Broker currently holds ~${sysMetrics.estimatedQueuedMessages} queued non-retained message(s) (stored=${sysMetrics.storedMessages}, retained=${sysMetrics.retainedMessages ?? 0}).`,
+          );
+        }
+
+        if (sysMetrics.droppedMessages !== null && sysMetrics.droppedMessages > 0) {
+          backlogDetected = true;
+          findings.push(
+            `Broker reports ${sysMetrics.droppedMessages} dropped publish message(s)${sysMetrics.droppedRate1m ? ` (${sysMetrics.droppedRate1m}/min)` : ""} — queue capacity or inflight window exceeded.`,
+          );
+          recommendations.push(
+            "Increase consumer throughput or raise broker max_queued_messages / max_inflight_messages after clearing stuck sessions.",
+          );
+        }
+
+        if (sysMetrics.disconnectedClients !== null && sysMetrics.disconnectedClients > 0) {
+          hasWarning = true;
+          findings.push(
+            `Broker has ${sysMetrics.disconnectedClients} disconnected persistent session(s) (connected=${sysMetrics.connectedClients ?? "?"}), which accumulate queued QoS 1/2 messages while offline.`,
+          );
+          recommendations.push(
+            "Verify whether disconnected downstream clients with cleanSession=false are intentionally offline or stuck/abandoned.",
+          );
+        }
+
+        const inRate = sysMetrics.publishReceivedRate1m ?? sysMetrics.receivedRate1m;
+        const outRate = sysMetrics.publishSentRate1m ?? sysMetrics.sentRate1m;
+        if (inRate !== null && outRate !== null && inRate >= 10 && outRate < inRate * 0.5) {
+          hasWarning = true;
+          findings.push(
+            `Broker ingress rate (${inRate}/min) is significantly higher than egress rate (${outRate}/min) — either consumers are lagging behind or topics have no active subscribers.`,
+          );
+          recommendations.push(
+            "Confirm downstream subscribers are subscribed to the exact topics Connector publishes and can process the incoming message rate.",
+          );
+        }
+      }
+
+      // 2. Evaluate Connector Publisher backpressure (PUBACK wait, timeouts, socket buffer)
+      if (publisherBackpressure.inFlightCount >= 10) {
+        backlogDetected = true;
+        findings.push(
+          `Connector currently has ${publisherBackpressure.inFlightCount} unacknowledged in-flight QoS publish(es) waiting for Broker PUBACK (peak=${publisherBackpressure.maxInFlightCount}).`,
+        );
+        recommendations.push(
+          "Broker PUBACK processing is congested or network link is saturated; check Broker CPU, disk persistence I/O, and network latency.",
+        );
+      }
+      if (publisherBackpressure.totalTimeouts > 0) {
+        backlogDetected = true;
+        findings.push(
+          `Connector experienced ${publisherBackpressure.totalTimeouts} MQTT publish timeout(s) (last error: ${publisherBackpressure.lastErrorMessage || "timeout"}).`,
+        );
+      }
+      if (publisherBackpressure.totalOutgoingBufferBytes > 65536) {
+        backlogDetected = true;
+        findings.push(
+          `Connector TCP outgoing buffer toward Broker is backed up (${publisherBackpressure.totalOutgoingBufferBytes} bytes queued in Node socket).`,
+        );
+      }
+      if (publisherBackpressure.avgPublishLatencyMs !== null && publisherBackpressure.avgPublishLatencyMs >= 500) {
+        backlogDetected = true;
+        findings.push(
+          `High Connector publish-to-PUBACK latency: avg ${publisherBackpressure.avgPublishLatencyMs}ms (p95=${publisherBackpressure.p95PublishLatencyMs}ms, max=${publisherBackpressure.maxPublishLatencyMs}ms).`,
+        );
+      } else if (
+        publisherBackpressure.avgPublishLatencyMs !== null &&
+        publisherBackpressure.avgPublishLatencyMs >= 150
+      ) {
+        hasWarning = true;
+        findings.push(
+          `Elevated Connector publish-to-PUBACK latency: avg ${publisherBackpressure.avgPublishLatencyMs}ms (max=${publisherBackpressure.maxPublishLatencyMs}ms).`,
+        );
+      }
+
+      // 3. Evaluate Loopback Probe latency
+      if (includeLoopbackProbe) {
+        if (!loopbackProbe.ok) {
+          hasWarning = true;
+          findings.push(
+            `QoS 1 loopback latency probe did not complete${loopbackProbe.error ? ` (${loopbackProbe.error})` : " (timed out or blocked by Broker ACL)"}.`,
+          );
+        } else if (
+          (loopbackProbe.pubackLatencyMs !== null && loopbackProbe.pubackLatencyMs >= 500) ||
+          (loopbackProbe.roundTripLatencyMs !== null && loopbackProbe.roundTripLatencyMs >= 1000)
+        ) {
+          backlogDetected = true;
+          findings.push(
+            `Broker loopback latency is severely degraded: PUBACK=${loopbackProbe.pubackLatencyMs}ms, RTT=${loopbackProbe.roundTripLatencyMs}ms.`,
+          );
+        } else if (
+          loopbackProbe.roundTripLatencyMs !== null &&
+          loopbackProbe.roundTripLatencyMs >= 200
+        ) {
+          hasWarning = true;
+          findings.push(
+            `Broker loopback RTT is elevated (${loopbackProbe.roundTripLatencyMs}ms; PUBACK=${loopbackProbe.pubackLatencyMs}ms).`,
+          );
+        }
+      }
+
+      const status = backlogDetected ? "BACKLOG_DETECTED" : hasWarning ? "WARNING" : "HEALTHY";
+      let diagnosis;
+      if (status === "BACKLOG_DETECTED") {
+        diagnosis = `MQTT Broker backlog / congestion detected on ${brokerUrl}: ${findings[0]}`;
+      } else if (status === "WARNING") {
+        diagnosis = `Potential MQTT Broker queue warning or limited visibility on ${brokerUrl}: ${findings[0]}`;
+      } else {
+        diagnosis = `Healthy: no MQTT message backlog or PUBACK backpressure detected on ${brokerUrl} (loopback RTT=${loopbackProbe.roundTripLatencyMs ?? "—"}ms, queued=${sysMetrics.estimatedQueuedMessages ?? 0}).`;
+      }
+
+      return {
+        ok: true,
+        connected: true,
+        status,
+        brokerUrl,
+        connectLatencyMs: connectedAt ? connectedAt - startedAt : null,
+        brokerVersion: sysMetrics.brokerVersion,
+        durationSeconds,
+        sysMetrics,
+        publisherBackpressure,
+        loopbackProbe,
+        findings,
+        recommendations,
+        diagnosis,
+      };
+    };
+
+    connectTimer = setTimeout(() => {
+      finish({
+        ok: false,
+        connected: false,
+        status: "UNREACHABLE",
+        brokerUrl,
+        publisherBackpressure,
+        loopbackProbe,
+        error: `MQTT connection timed out after ${connectTimeoutMs}ms`,
+        findings: [`Unable to connect to MQTT broker at ${brokerUrl} within ${connectTimeoutMs}ms.`],
+        recommendations: [
+          "Verify the MQTT broker service is running and reachable from the Connector host.",
+        ],
+        diagnosis: `Broker unreachable at ${brokerUrl} (connection timed out).`,
+      });
+    }, connectTimeoutMs);
+
+    client.once("connect", () => {
+      if (settled) return;
+      clearTimeout(connectTimer);
+      connectedAt = Date.now();
+
+      // Subscribe to $SYS/# for broker queue/drop/session telemetry
+      client.subscribe("$SYS/#", { qos: 0 }, (err, granted) => {
+        if (err || (Array.isArray(granted) && granted.some((g) => g?.qos === 128))) {
+          sysSubscribeDenied = true;
+        }
+      });
+
+      // Optionally run a safe QoS 1 non-retained loopback latency probe
+      if (includeLoopbackProbe) {
+        client.subscribe(probeTopic, { qos: 1 }, (subErr, granted) => {
+          if (settled) return;
+          if (subErr || (Array.isArray(granted) && granted.some((g) => g?.qos === 128))) {
+            loopbackProbe.error = subErr ? subErr.message : "Subscription rejected by Broker ACL";
+            return;
+          }
+          probeSentAt = Date.now();
+          client.publish(
+            probeTopic,
+            JSON.stringify({ probeId, sentAt: probeSentAt }),
+            { qos: 1, retain: false },
+            (pubErr) => {
+              if (settled) return;
+              if (pubErr) {
+                loopbackProbe.error = pubErr.message;
+              } else if (probeSentAt !== null) {
+                loopbackProbe.pubackLatencyMs = Math.max(0, Date.now() - probeSentAt);
+              }
+            },
+          );
+        });
+      }
+
+      samplingTimer = setTimeout(() => {
+        finish(buildDiagnosis());
+      }, durationSeconds * 1000);
+    });
+
+    client.on("message", (topic, payloadBuffer) => {
+      if (settled) return;
+      const text = payloadBuffer.toString("utf8").trim();
+      if (topic === probeTopic && probeSentAt !== null) {
+        loopbackProbe.roundTripLatencyMs = Math.max(0, Date.now() - probeSentAt);
+        if (loopbackProbe.pubackLatencyMs === null) {
+          loopbackProbe.pubackLatencyMs = loopbackProbe.roundTripLatencyMs;
+        }
+        loopbackProbe.ok = true;
+        return;
+      }
+      if (topic.startsWith("$SYS/")) {
+        sysMap.set(topic, text);
+      }
+    });
+
+    client.once("error", (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      finish({
+        ok: false,
+        connected: Boolean(connectedAt),
+        status: "UNREACHABLE",
+        brokerUrl,
+        publisherBackpressure,
+        loopbackProbe,
+        error: message,
+        findings: [`MQTT broker error: ${message}`],
+        recommendations: ["Check MQTT broker logs, authentication credentials, and port availability."],
+        diagnosis: `MQTT broker error on ${brokerUrl}: ${message}`,
+      });
+    });
+  });
 }

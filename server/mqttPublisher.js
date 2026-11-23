@@ -2,9 +2,101 @@ import mqtt from "mqtt";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 3000;
 const DEFAULT_PUBLISH_TIMEOUT_MS = 5000;
+const MAX_LATENCY_SAMPLES = 100;
+const RATE_WINDOW_MS = 60_000;
 
 const clients = new Map();
 const pendingConnections = new Map();
+
+function createInitialStats() {
+  return {
+    inFlightCount: 0,
+    maxInFlightCount: 0,
+    totalPublished: 0,
+    totalErrors: 0,
+    totalTimeouts: 0,
+    lastPublishAt: null,
+    lastPublishLatencyMs: null,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+    recentLatenciesMs: [],
+    recentPublishTimestamps: [],
+  };
+}
+
+let publisherStats = createInitialStats();
+
+function pruneRecentTimestamps(now) {
+  const cutoff = now - RATE_WINDOW_MS;
+  while (
+    publisherStats.recentPublishTimestamps.length > 0 &&
+    publisherStats.recentPublishTimestamps[0] < cutoff
+  ) {
+    publisherStats.recentPublishTimestamps.shift();
+  }
+}
+
+export function resetMqttPublisherStats() {
+  publisherStats = createInitialStats();
+}
+
+export function getMqttPublisherStats() {
+  const now = Date.now();
+  pruneRecentTimestamps(now);
+
+  const latencies = publisherStats.recentLatenciesMs;
+  let avgPublishLatencyMs = null;
+  let p95PublishLatencyMs = null;
+  let maxPublishLatencyMs = null;
+  if (latencies.length > 0) {
+    const sum = latencies.reduce((acc, v) => acc + v, 0);
+    avgPublishLatencyMs = Number((sum / latencies.length).toFixed(1));
+    const sorted = [...latencies].sort((a, b) => a - b);
+    p95PublishLatencyMs = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+    maxPublishLatencyMs = sorted[sorted.length - 1];
+  }
+
+  let recentPublishRatePerSec = 0;
+  const recentCount = publisherStats.recentPublishTimestamps.length;
+  if (recentCount > 0) {
+    const oldest = publisherStats.recentPublishTimestamps[0];
+    const spanSec = Math.max(1, Math.min(RATE_WINDOW_MS, now - oldest) / 1000);
+    recentPublishRatePerSec = Number((recentCount / spanSec).toFixed(2));
+  }
+
+  let connectedClientCount = 0;
+  let totalOutgoingBufferBytes = 0;
+  for (const client of clients.values()) {
+    if (client?.connected) connectedClientCount += 1;
+    const writableLen = Number(client?.stream?.writableLength ?? 0);
+    if (Number.isFinite(writableLen) && writableLen > 0) {
+      totalOutgoingBufferBytes += writableLen;
+    }
+  }
+
+  return {
+    inFlightCount: publisherStats.inFlightCount,
+    maxInFlightCount: publisherStats.maxInFlightCount,
+    totalPublished: publisherStats.totalPublished,
+    totalErrors: publisherStats.totalErrors,
+    totalTimeouts: publisherStats.totalTimeouts,
+    avgPublishLatencyMs,
+    p95PublishLatencyMs,
+    maxPublishLatencyMs,
+    lastPublishLatencyMs: publisherStats.lastPublishLatencyMs,
+    recentPublishRatePerSec,
+    activeClientCount: clients.size,
+    connectedClientCount,
+    totalOutgoingBufferBytes,
+    lastPublishAt: publisherStats.lastPublishAt
+      ? new Date(publisherStats.lastPublishAt).toISOString()
+      : null,
+    lastErrorAt: publisherStats.lastErrorAt
+      ? new Date(publisherStats.lastErrorAt).toISOString()
+      : null,
+    lastErrorMessage: publisherStats.lastErrorMessage,
+  };
+}
 
 function clampTimeout(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -140,29 +232,56 @@ export async function publishPayload(config, topic, payload) {
     30000,
   );
 
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(`MQTT publish timed out after ${publishTimeout}ms (${topic})`));
-    }, publishTimeout);
+  const startedAt = Date.now();
+  publisherStats.inFlightCount += 1;
+  if (publisherStats.inFlightCount > publisherStats.maxInFlightCount) {
+    publisherStats.maxInFlightCount = publisherStats.inFlightCount;
+  }
 
-    client.publish(
-      topic,
-      message,
-      { qos: Number(config.qos ?? 1) },
-      (error) => {
+  try {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        if (error) reject(error);
-        else resolve();
-      },
-    );
-  });
+        publisherStats.totalTimeouts += 1;
+        reject(new Error(`MQTT publish timed out after ${publishTimeout}ms (${topic})`));
+      }, publishTimeout);
 
-  return true;
+      client.publish(
+        topic,
+        message,
+        { qos: Number(config.qos ?? 1) },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error) reject(error);
+          else resolve();
+        },
+      );
+    });
+
+    const completedAt = Date.now();
+    const latencyMs = Math.max(0, completedAt - startedAt);
+    publisherStats.totalPublished += 1;
+    publisherStats.lastPublishAt = completedAt;
+    publisherStats.lastPublishLatencyMs = latencyMs;
+    publisherStats.recentLatenciesMs.push(latencyMs);
+    if (publisherStats.recentLatenciesMs.length > MAX_LATENCY_SAMPLES) {
+      publisherStats.recentLatenciesMs.shift();
+    }
+    publisherStats.recentPublishTimestamps.push(completedAt);
+    pruneRecentTimestamps(completedAt);
+    return true;
+  } catch (error) {
+    publisherStats.totalErrors += 1;
+    publisherStats.lastErrorAt = Date.now();
+    publisherStats.lastErrorMessage = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    publisherStats.inFlightCount = Math.max(0, publisherStats.inFlightCount - 1);
+  }
 }
 
 export async function testMqttConnection(config) {

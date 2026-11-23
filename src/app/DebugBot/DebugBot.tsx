@@ -130,6 +130,60 @@ interface MqttSubscribeResult {
   error?: string;
 }
 
+interface MqttBacklogResult {
+  ok: boolean;
+  connected: boolean;
+  status: "HEALTHY" | "WARNING" | "BACKLOG_DETECTED" | "UNREACHABLE";
+  brokerUrl?: string;
+  connectLatencyMs?: number | null;
+  brokerVersion?: string | null;
+  durationSeconds?: number;
+  sysMetrics?: {
+    available: boolean;
+    topicCount: number;
+    storedMessages: number | null;
+    retainedMessages: number | null;
+    estimatedQueuedMessages: number | null;
+    storedBytes: number | null;
+    droppedMessages: number | null;
+    droppedRate1m: number | null;
+    connectedClients: number | null;
+    disconnectedClients: number | null;
+    subscriptionsCount: number | null;
+    receivedRate1m: number | null;
+    sentRate1m: number | null;
+    publishReceivedRate1m: number | null;
+    publishSentRate1m: number | null;
+    rawSample: Record<string, string>;
+  };
+  publisherBackpressure?: {
+    inFlightCount: number;
+    maxInFlightCount: number;
+    totalPublished: number;
+    totalErrors: number;
+    totalTimeouts: number;
+    avgPublishLatencyMs: number | null;
+    p95PublishLatencyMs: number | null;
+    maxPublishLatencyMs: number | null;
+    recentPublishRatePerSec: number;
+    totalOutgoingBufferBytes: number;
+    lastPublishAt: string | null;
+    lastErrorMessage: string | null;
+  };
+  loopbackProbe?: {
+    enabled: boolean;
+    ok: boolean;
+    topic: string | null;
+    pubackLatencyMs: number | null;
+    roundTripLatencyMs: number | null;
+    error: string | null;
+  };
+  findings?: string[];
+  recommendations?: string[];
+  diagnosis?: string;
+  error?: string;
+}
+
 interface ConfigAuditResult {
   valid: boolean;
   errorCount: number;
@@ -480,6 +534,12 @@ export default function DebugBot() {
   const [mqttDiag, setMqttDiag] = useState<MqttSubscribeResult | null>(null);
   const [mqttLoading, setMqttLoading] = useState(false);
 
+  // MQTT Broker Backlog Diagnostics state
+  const [backlogDuration, setBacklogDuration] = useState(2);
+  const [backlogLoopback, setBacklogLoopback] = useState(true);
+  const [backlogDiag, setBacklogDiag] = useState<MqttBacklogResult | null>(null);
+  const [backlogLoading, setBacklogLoading] = useState(false);
+
   // Config Audit + System Health state
   const [auditDiag, setAuditDiag] = useState<ConfigAuditResult | null>(null);
   const [healthDiag, setHealthDiag] = useState<SystemHealthResult | null>(null);
@@ -759,6 +819,28 @@ export default function DebugBot() {
     }
   }
 
+  async function runBrokerBacklogCheck() {
+    setBacklogLoading(true);
+    try {
+      const data = await callTool<MqttBacklogResult>("diagnose_mqtt_broker_backlog", {
+        duration_seconds: backlogDuration,
+        include_loopback_probe: backlogLoopback,
+      });
+      if (data.result) {
+        setBacklogDiag(data.result);
+      } else {
+        setBacklogDiag({
+          ok: false,
+          connected: false,
+          status: "UNREACHABLE",
+          error: data.error || "Broker backlog diagnostic failed",
+        });
+      }
+    } finally {
+      setBacklogLoading(false);
+    }
+  }
+
   async function runAuditAndHealth() {
     setAuditLoading(true);
     try {
@@ -781,14 +863,14 @@ export default function DebugBot() {
             "请检查所有运行中的 Modbus 气缸 Datablock，列出每个气缸多久没有更新数据，重点标出长时间未更新或从未更新的气缸。",
         },
         {
+          label: "诊断 MQTT Broker 是否消息堆积",
+          prompt:
+            "请诊断当前 MQTT Broker 是否存在消息堆积或发送背压，检查 $SYS 队列、丢包、离线持久会话、Connector PUBACK 延迟及环回延迟并给出排查建议。",
+        },
+        {
           label: "全面体检配置与 MQTT 推流采样",
           prompt:
             "请体检当前 Connector 的 PLC 配置，并订阅已配置的 MQTT Topic 采样 3 秒，核查气缸 6 个时间戳与 4 个特征时间是否全部正常。",
-        },
-        {
-          label: "测试 PLC 与 MQTT 协议层连通性",
-          prompt:
-            "请对已保存的 PLC 和 MQTT Broker 执行实时 TCP 与协议层握手测试，分解连接与读取延迟并定位任何网络或认证异常。",
         },
         {
           label: "配置体检与后端错误日志排查",
@@ -803,14 +885,14 @@ export default function DebugBot() {
             "Inspect all active Modbus cylinder datablocks and report how long each cylinder has gone without updating data, highlighting any stale or never-updated cylinders.",
         },
         {
+          label: "Diagnose MQTT Broker Backlog",
+          prompt:
+            "Check whether MQTT messages are piling up at the Broker by inspecting $SYS queue/dropped/offline-session metrics, Connector PUBACK backpressure, and loopback latency.",
+        },
+        {
           label: "Audit Config & Sample Live MQTT Stream",
           prompt:
             "Validate saved Connector PLC & MQTT configurations and subscribe to configured MQTT topics for 3 seconds to verify 6-timestamp cylinder cycles and t1..t4 durations.",
-        },
-        {
-          label: "Test PLC & MQTT Protocol Connectivity",
-          prompt:
-            "Run live TCP and protocol-level handshakes against all saved PLCs and the MQTT broker, reporting latencies and any network, protocol, or authentication errors.",
         },
         {
           label: "Audit Configuration & Runtime Health",
@@ -914,8 +996,8 @@ export default function DebugBot() {
                     <Icon name="bot" size={17} />
                     <span>
                       {zh
-                        ? `已挂载 ${tools.length || 6} 个 Connector 专属诊断技能（气缸更新时长监测 / MQTT 采样 / 连通性测试 / 配置体检 / 系统日志）`
-                        : `${tools.length || 6} Connector diagnostic skills attached (Cylinder Freshness / MQTT Sampler / Connectivity / Config Audit / Runtime Health)`}
+                        ? `已挂载 ${tools.length || 7} 个 Connector 专属诊断技能`
+                        : `${tools.length || 7} Connector diagnostic skills attached`}
                     </span>
                   </div>
                   {messages.length > 0 && (
@@ -1375,15 +1457,232 @@ export default function DebugBot() {
                 )}
               </section>
 
-              {/* Panel 3: Configuration Audit & Backend Runtime Health */}
+              {/* Panel 3: MQTT Broker Backlog & Backpressure Diagnostics */}
+              <section className="dbot-panel">
+                <div className="dbot-panel-head">
+                  <div className="dbot-panel-title">
+                    <Icon name="activity" size={18} />
+                    <h2>
+                      {zh
+                        ? "3. MQTT Broker 消息堆积与背压诊断"
+                        : "3. MQTT Broker Backlog & Backpressure Diagnostics"}
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="dbot-btn-primary"
+                    disabled={backlogLoading}
+                    onClick={() => void runBrokerBacklogCheck()}
+                  >
+                    <Icon name={backlogLoading ? "spinner" : "play"} size={15} />
+                    {backlogLoading
+                      ? zh
+                        ? `诊断中 (${backlogDuration}s)…`
+                        : `Checking (${backlogDuration}s)…`
+                      : zh
+                        ? "检测 Broker 堆积"
+                        : "Check Broker Backlog"}
+                  </button>
+                </div>
+
+                <div className="dbot-inline-controls">
+                  <label className="dbot-field-inline is-compact">
+                    <span>{zh ? "$SYS 采集时长" : "$SYS Sample"}</span>
+                    <select
+                      value={backlogDuration}
+                      onChange={(e) => setBacklogDuration(Number(e.target.value))}
+                    >
+                      <option value={2}>2s</option>
+                      <option value={3}>3s</option>
+                      <option value={5}>5s</option>
+                    </select>
+                  </label>
+                  <label className="dbot-checkbox-inline">
+                    <input
+                      type="checkbox"
+                      checked={backlogLoopback}
+                      onChange={(e) => setBacklogLoopback(e.target.checked)}
+                    />
+                    <span>
+                      {zh
+                        ? "发送临时 QoS 1 环回探针（测 PUBACK 与往返延迟，不保留消息）"
+                        : "Run non-retained QoS 1 loopback probe (PUBACK & RTT latency)"}
+                    </span>
+                  </label>
+                </div>
+
+                {backlogDiag && (
+                  <div className="dbot-diag-body">
+                    <div
+                      className={`dbot-diagnosis-banner ${
+                        backlogDiag.status === "HEALTHY"
+                          ? "is-ok"
+                          : backlogDiag.status === "WARNING"
+                            ? "is-warn"
+                            : "is-error"
+                      }`}
+                    >
+                      <strong>{backlogDiag.diagnosis || backlogDiag.error}</strong>
+                    </div>
+
+                    <div className="dbot-stat-strip">
+                      <div className="dbot-stat-box">
+                        <span>{zh ? "堆积判定" : "Verdict"}</span>
+                        <strong
+                          className={`dbot-pill ${
+                            backlogDiag.status === "HEALTHY"
+                              ? "is-ok"
+                              : backlogDiag.status === "WARNING"
+                                ? "is-warn"
+                                : "is-error"
+                          }`}
+                        >
+                          {backlogDiag.status === "HEALTHY"
+                            ? zh
+                              ? "正常（无堆积）"
+                              : "HEALTHY"
+                            : backlogDiag.status === "WARNING"
+                              ? zh
+                                ? "存在风险 / 受限"
+                                : "WARNING"
+                              : backlogDiag.status === "BACKLOG_DETECTED"
+                                ? zh
+                                  ? "检测到堆积"
+                                  : "BACKLOG DETECTED"
+                                : zh
+                                  ? "无法连接"
+                                  : "UNREACHABLE"}
+                        </strong>
+                        {backlogDiag.brokerVersion && <small>{backlogDiag.brokerVersion}</small>}
+                      </div>
+
+                      <div className="dbot-stat-box">
+                        <span>{zh ? "Broker 排队 / 丢弃" : "Queued / Dropped"}</span>
+                        <strong>
+                          {backlogDiag.sysMetrics?.available
+                            ? `${backlogDiag.sysMetrics.estimatedQueuedMessages ?? "—"} / ${backlogDiag.sysMetrics.droppedMessages ?? 0}`
+                            : zh
+                              ? "$SYS 不可用"
+                              : "$SYS N/A"}
+                        </strong>
+                        {backlogDiag.sysMetrics?.available && (
+                          <small>
+                            {zh ? "存储" : "Stored"}: {backlogDiag.sysMetrics.storedMessages ?? "—"} ·{" "}
+                            {zh ? "保留" : "Retained"}: {backlogDiag.sysMetrics.retainedMessages ?? 0}
+                          </small>
+                        )}
+                      </div>
+
+                      <div className="dbot-stat-box">
+                        <span>{zh ? "离线会话 / 在线客户端" : "Offline / Connected"}</span>
+                        <strong>
+                          {backlogDiag.sysMetrics?.available
+                            ? `${backlogDiag.sysMetrics.disconnectedClients ?? "—"} / ${backlogDiag.sysMetrics.connectedClients ?? "—"}`
+                            : "—"}
+                        </strong>
+                        {backlogDiag.sysMetrics?.available &&
+                          backlogDiag.sysMetrics.subscriptionsCount !== null && (
+                            <small>
+                              {zh ? "订阅数" : "Subs"}: {backlogDiag.sysMetrics.subscriptionsCount}
+                            </small>
+                          )}
+                      </div>
+
+                      <div className="dbot-stat-box">
+                        <span>{zh ? "1分钟入站 / 出站速率" : "1m In / Out Rate"}</span>
+                        <strong>
+                          {backlogDiag.sysMetrics?.available
+                            ? `${backlogDiag.sysMetrics.publishReceivedRate1m ?? backlogDiag.sysMetrics.receivedRate1m ?? "—"} / ${backlogDiag.sysMetrics.publishSentRate1m ?? backlogDiag.sysMetrics.sentRate1m ?? "—"}`
+                            : "—"}
+                        </strong>
+                      </div>
+
+                      {backlogDiag.publisherBackpressure && (
+                        <div className="dbot-stat-box">
+                          <span>{zh ? "Connector 发送背压" : "Publisher Backpressure"}</span>
+                          <strong>
+                            {zh ? "在途" : "In-flight"}: {backlogDiag.publisherBackpressure.inFlightCount}{" "}
+                            · {zh ? "超时" : "Timeouts"}: {backlogDiag.publisherBackpressure.totalTimeouts}
+                          </strong>
+                          <small>
+                            PUBACK:{" "}
+                            {backlogDiag.publisherBackpressure.avgPublishLatencyMs !== null
+                              ? `${backlogDiag.publisherBackpressure.avgPublishLatencyMs} ms`
+                              : "—"}{" "}
+                            · {backlogDiag.publisherBackpressure.recentPublishRatePerSec} msg/s
+                          </small>
+                        </div>
+                      )}
+
+                      {backlogDiag.loopbackProbe?.enabled && (
+                        <div className="dbot-stat-box">
+                          <span>{zh ? "Broker 环回延迟" : "Loopback Latency"}</span>
+                          <strong>
+                            {backlogDiag.loopbackProbe.ok
+                              ? `RTT ${backlogDiag.loopbackProbe.roundTripLatencyMs} ms`
+                              : zh
+                                ? "未完成"
+                                : "Failed"}
+                          </strong>
+                          <small>
+                            {backlogDiag.loopbackProbe.ok
+                              ? `PUBACK: ${backlogDiag.loopbackProbe.pubackLatencyMs ?? "—"} ms`
+                              : backlogDiag.loopbackProbe.error || "—"}
+                          </small>
+                        </div>
+                      )}
+                    </div>
+
+                    {backlogDiag.findings && backlogDiag.findings.length > 0 && (
+                      <div
+                        className={
+                          backlogDiag.status === "BACKLOG_DETECTED" ||
+                          backlogDiag.status === "UNREACHABLE"
+                            ? "dbot-error-box"
+                            : "dbot-warning-box"
+                        }
+                      >
+                        {backlogDiag.findings.map((item, idx) => (
+                          <div key={idx}>• {item}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {backlogDiag.recommendations && backlogDiag.recommendations.length > 0 && (
+                      <div className="dbot-warning-box">
+                        <strong>{zh ? "排查建议：" : "Recommendations:"}</strong>
+                        {backlogDiag.recommendations.map((rec, idx) => (
+                          <div key={idx}>→ {rec}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {backlogDiag.sysMetrics?.available &&
+                      Object.keys(backlogDiag.sysMetrics.rawSample).length > 0 && (
+                        <details className="dbot-topic-sample-item">
+                          <summary>
+                            <strong>
+                              {zh
+                                ? `Broker $SYS 原始指标 (${backlogDiag.sysMetrics.topicCount} 项)`
+                                : `Broker $SYS Raw Metrics (${backlogDiag.sysMetrics.topicCount} topics)`}
+                            </strong>
+                          </summary>
+                          <pre>{JSON.stringify(backlogDiag.sysMetrics.rawSample, null, 2)}</pre>
+                        </details>
+                      )}
+                  </div>
+                )}
+              </section>
+
+              {/* Panel 4: Configuration Audit & Backend Runtime Health */}
               <section className="dbot-panel">
                 <div className="dbot-panel-head">
                   <div className="dbot-panel-title">
                     <Icon name="shield" size={18} />
                     <h2>
                       {zh
-                        ? "3. 配置静态体检与后端运行日志"
-                        : "3. Configuration Audit & Backend Runtime Health"}
+                        ? "4. 配置静态体检与后端运行日志"
+                        : "4. Configuration Audit & Backend Runtime Health"}
                     </h2>
                   </div>
                   <button

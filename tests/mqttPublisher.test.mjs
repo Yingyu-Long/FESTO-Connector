@@ -33,7 +33,10 @@ test("mqttPublisher deduplicates concurrent connects, times out fast, and enforc
   };
 
   t.mock.module("mqtt", { defaultExport: mockMqtt });
-  const { publishPayload } = await import("../server/mqttPublisher.js");
+  const { publishPayload, getMqttPublisherStats, resetMqttPublisherStats } = await import(
+    "../server/mqttPublisher.js"
+  );
+  resetMqttPublisherStats();
 
   // 1. 66 concurrent publishes share a single MQTT connection attempt.
   const config = { host: "broker-1", port: 1883, qos: 1, connectTimeout: 500, publishTimeout: 500 };
@@ -63,4 +66,11 @@ test("mqttPublisher deduplicates concurrent connects, times out fast, and enforc
     publishPayload(config, "cyl/hang", { ok: true }),
     /MQTT publish timed out/,
   );
+
+  const stats = getMqttPublisherStats();
+  assert.equal(stats.totalPublished, 66);
+  assert.equal(stats.totalTimeouts, 1);
+  assert.equal(stats.inFlightCount, 0);
+  assert.ok(stats.maxInFlightCount >= 1);
+  assert.equal(typeof stats.avgPublishLatencyMs, "number");
 });
