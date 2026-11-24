@@ -751,6 +751,13 @@
   line-height: 1.45;
 }
 
+.dbot-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* Diagnostic Toolbar */
 .dbot-toolbar {
   display: flex;

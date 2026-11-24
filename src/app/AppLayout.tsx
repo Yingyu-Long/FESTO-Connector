@@ -10,9 +10,6 @@ import {
 
 type Asset = "MIP" | "ENI" | "MIE";
 
-const downloadsUrl =
-  "https://www.festo.com/de/en/p/ax-motion-insights-pneumatic-id_GASA_MIP/?tab=SUPPORT_PORTAL&documentTypeGroup=EXPERT_KNOWLEDGE&supportPortalTab=18";
-
 function DatabaseIcon({ size = 14 }: { size?: number }) {
   return (
     <svg
@@ -148,32 +145,23 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
               aria-label={zh ? "当前模块导航" : "Module navigation"}
             >
               {!isDebugBot ? (
-                <>
-                  {(
-                    [
-                      ["/dashboard", zh ? "连接状态" : "Status", "Status"],
-                      ["/add", zh ? "添加 PLC" : "Add PLC", "Add"],
-                      ["/mqtt", zh ? "MQTT 配置" : "MQTT Broker", "MQTT"],
-                      ["/import", zh ? "导入配置" : "Import", "Import"],
-                    ] as const
-                  ).map(([path, label, group]) => (
-                    <button
-                      key={path}
-                      type="button"
-                      className={`unified-topbar-nav-item ${currentConnectorGroup === group ? "is-active" : ""}`}
-                      onClick={() => navigate(path)}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                (
+                  [
+                    ["/dashboard", zh ? "连接状态" : "Status", "Status"],
+                    ["/add", zh ? "添加 PLC" : "Add PLC", "Add"],
+                    ["/mqtt", zh ? "MQTT 配置" : "MQTT Broker", "MQTT"],
+                    ["/import", zh ? "导入配置" : "Import", "Import"],
+                  ] as const
+                ).map(([path, label, group]) => (
                   <button
+                    key={path}
                     type="button"
-                    className="unified-topbar-nav-item"
-                    onClick={() => window.open(downloadsUrl, "_blank", "noopener,noreferrer")}
+                    className={`unified-topbar-nav-item ${currentConnectorGroup === group ? "is-active" : ""}`}
+                    onClick={() => navigate(path)}
                   >
-                    {zh ? "资料下载 ↗" : "Downloads ↗"}
+                    {label}
                   </button>
-                </>
+                ))
               ) : (
                 (
                   [
@@ -259,10 +247,7 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
         {/* Unified Application Footer */}
         <footer className="unified-app-footer">
           <div className="unified-app-footer-links">
-            <span>Version 24.0.6</span>
-            <a href={downloadsUrl} target="_blank" rel="noreferrer">
-              {zh ? "Festo 技术支持 ↗" : "Support Portal ↗"}
-            </a>
+            <span>Version 3.1</span>
           </div>
         </footer>
       </div>

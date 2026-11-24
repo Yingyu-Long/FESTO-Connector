@@ -4,7 +4,11 @@ import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { query } from "./database.js";
-import { closeAllMqttClients, testMqttConnection } from "./mqttPublisher.js";
+import {
+  closeAllMqttClients,
+  resetMqttPublisherStats,
+  testMqttConnection,
+} from "./mqttPublisher.js";
 import { browseOpcuaNodes, testOpcuaConnection } from "./plc/opcuaClient.js";
 import {
   ModbusConfigurationError,
@@ -483,6 +487,11 @@ app.post("/api/debug-bot/test-mode", async (request, response) => {
           : "Failed to run Modbus Test Mode publish",
     });
   }
+});
+
+app.post("/api/debug-bot/backlog/reset", (_request, response) => {
+  resetMqttPublisherStats();
+  response.json({ ok: true });
 });
 
 app.post("/api/debug-bot/tool", async (request, response) => {

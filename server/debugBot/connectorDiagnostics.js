@@ -559,7 +559,7 @@ export async function subscribeConnectorMqtt({
       }
     });
 
-    client.once("error", (error) => {
+    client.on("error", (error) => {
       finish({
         ok: false,
         connected: Boolean(connectedAt),
@@ -1769,7 +1769,7 @@ export async function diagnoseMqttBrokerBacklog({
       }
     });
 
-    client.once("error", (error) => {
+    client.on("error", (error) => {
       const message = error instanceof Error ? error.message : String(error);
       finish({
         ok: false,

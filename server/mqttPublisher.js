@@ -126,6 +126,9 @@ function clientKey(config) {
 function disposeClient(client) {
   if (!client) return;
   try {
+    if (typeof client.listenerCount === "function" && client.listenerCount("error") === 0) {
+      client.on("error", () => {});
+    }
     client.end(true);
   } catch {
     // Ignore cleanup errors on already-closed sockets.
@@ -165,6 +168,7 @@ async function getClient(config) {
     });
 
     let settled = false;
+    const absorbLateError = () => {};
     const cleanupStartup = () => {
       clearTimeout(timer);
       client.removeListener("connect", handleConnect);
@@ -175,6 +179,7 @@ async function getClient(config) {
     const fail = (error) => {
       if (settled) return;
       settled = true;
+      client.on("error", absorbLateError);
       cleanupStartup();
       disposeClient(client);
       reject(error);
@@ -183,14 +188,14 @@ async function getClient(config) {
     const handleConnect = () => {
       if (settled) return;
       settled = true;
-      cleanupStartup();
-      // Keep an error listener attached so later socket drops never crash Node.
+      // Keep an error listener attached before removing startup handler so later socket drops never crash Node.
       client.on("error", () => {
         if (clients.get(key) === client) clients.delete(key);
       });
       client.on("close", () => {
         if (clients.get(key) === client) clients.delete(key);
       });
+      cleanupStartup();
       clients.set(key, client);
       resolve(client);
     };
@@ -208,7 +213,7 @@ async function getClient(config) {
     }, connectTimeout);
 
     client.once("connect", handleConnect);
-    client.once("error", handleError);
+    client.on("error", handleError);
     client.once("close", handleClose);
   }).finally(() => {
     if (pendingConnections.get(key) === connectPromise) {

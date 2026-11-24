@@ -742,6 +742,7 @@ export default function DebugBot() {
   const [backlogLoopback, setBacklogLoopback] = useState(true);
   const [backlogDiag, setBacklogDiag] = useState<MqttBacklogResult | null>(null);
   const [backlogLoading, setBacklogLoading] = useState(false);
+  const [backlogClearing, setBacklogClearing] = useState(false);
 
   // Config Audit + System Health state
   const [auditDiag, setAuditDiag] = useState<ConfigAuditResult | null>(null);
@@ -1085,6 +1086,16 @@ export default function DebugBot() {
       }
     } finally {
       setBacklogLoading(false);
+    }
+  }
+
+  async function clearBrokerBacklogCheck() {
+    setBacklogClearing(true);
+    try {
+      await fetch("/api/debug-bot/backlog/reset", { method: "POST" }).catch(() => undefined);
+      setBacklogDiag(null);
+    } finally {
+      setBacklogClearing(false);
     }
   }
 
@@ -2198,21 +2209,37 @@ export default function DebugBot() {
                       : "Analyze Broker $SYS queues, drops, offline sessions, publisher backpressure, and QoS 1 loopback latency."}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="dbot-btn-primary"
-                  disabled={backlogLoading}
-                  onClick={() => void runBrokerBacklogCheck()}
-                >
-                  <Icon name={backlogLoading ? "spinner" : "play"} size={14} />
-                  {backlogLoading
-                    ? zh
-                      ? `诊断中 (${backlogDuration}s)…`
-                      : `Checking (${backlogDuration}s)…`
-                    : zh
-                      ? "检测堆积"
-                      : "Check Backlog"}
-                </button>
+                <div className="dbot-panel-actions">
+                  <button
+                    type="button"
+                    className="dbot-btn-secondary"
+                    disabled={backlogLoading || backlogClearing}
+                    title={
+                      zh
+                        ? "清空当前检测结果并重置 Connector 发送端背压与超时统计"
+                        : "Clear results and reset Connector publisher backpressure & timeout counters"
+                    }
+                    onClick={() => void clearBrokerBacklogCheck()}
+                  >
+                    <Icon name={backlogClearing ? "spinner" : "trash"} size={14} />
+                    {zh ? "清空检测" : "Clear"}
+                  </button>
+                  <button
+                    type="button"
+                    className="dbot-btn-primary"
+                    disabled={backlogLoading || backlogClearing}
+                    onClick={() => void runBrokerBacklogCheck()}
+                  >
+                    <Icon name={backlogLoading ? "spinner" : "play"} size={14} />
+                    {backlogLoading
+                      ? zh
+                        ? `诊断中 (${backlogDuration}s)…`
+                        : `Checking (${backlogDuration}s)…`
+                      : zh
+                        ? "检测堆积"
+                        : "Check Backlog"}
+                  </button>
+                </div>
               </div>
 
               <div className="dbot-toolbar">

@@ -16,7 +16,9 @@ esac
 docker info >/dev/null
 docker compose version
 docker buildx build --platform "$platform" --load --tag "$app_image" "$project_dir"
-docker pull --platform "$platform" "$db_image"
+if [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$db_image" 2>/dev/null || true)" != "$platform" ]]; then
+  docker pull --platform "$platform" "$db_image"
+fi
 
 # Atomic replacement leaves the previous delivery archive intact if export fails.
 trap 'rm -f "$archive.partial"' EXIT
