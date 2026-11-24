@@ -114,6 +114,31 @@ export function hasCycleProgressed(previous, current) {
   return allAdvanced || allReset;
 }
 
+function shortTimestampName(fieldName) {
+  return fieldName.replace(/^timestamp_/, "");
+}
+
+function describeCycleInconsistency(timestamps) {
+  const {
+    timestamp_DO_MCtrl14_ON: t14On,
+    timestamp_DI_IPos_OFF: tIPosOff,
+    timestamp_DI_EPos_ON: tEPosOn,
+    timestamp_DO_MCtrl12_ON: t12On,
+    timestamp_DI_EPos_OFF: tEPosOff,
+    timestamp_DI_IPos_ON: tIPosOn,
+  } = timestamps;
+
+  const problems = [];
+  if (tIPosOff <= t14On) problems.push("t1 (IPos_OFF <= MCtrl14_ON)");
+  if (tEPosOn <= tIPosOff) problems.push("t2 (EPos_ON <= IPos_OFF)");
+  if (tEPosOff <= t12On) problems.push("t3 (EPos_OFF <= MCtrl12_ON)");
+  if (tIPosOn <= tEPosOff) problems.push("t4 (IPos_ON <= EPos_OFF)");
+  if (problems.length > 0) {
+    return `Stroke timestamps out of order: ${problems.join(", ")}`;
+  }
+  return "Extend and retract strokes overlap (torn mid-cycle snapshot)";
+}
+
 function mqttPayload(values) {
   const payload = Object.fromEntries(timestampFields.map(({ name }) => {
     const value = Number(values[name]);
@@ -127,6 +152,187 @@ function mqttPayload(values) {
     cycle_counter: values.cycle_counter,
     part_number: values.part_number,
     isThisAutomaticMode: true,
+  };
+}
+
+export function buildDatablockMqttPayload(values, { isCustom = false } = {}) {
+  return isCustom ? values : mqttPayload(values);
+}
+
+/**
+ * Evaluates a datablock against the Connector's normal-mode publish standard
+ * (safe JSON timestamps, all 6 cycle timestamps > 0, monotonic cycle order,
+ * and full 6-timestamp progression vs the last published cycle).
+ */
+export function evaluateDatablockPublishGate(
+  values,
+  previousCycle = null,
+  { isCustom = false } = {},
+) {
+  if (!values || typeof values !== "object") {
+    return {
+      enforced: true,
+      eligible: false,
+      consistent: false,
+      progressed: false,
+      reason: "NO_VALUES",
+      detail: "No datablock values available",
+      cycle: null,
+      zeroFields: [],
+      changedTimestampFields: [],
+      unchangedTimestampFields: [],
+    };
+  }
+
+  try {
+    buildDatablockMqttPayload(values, { isCustom });
+  } catch (error) {
+    return {
+      enforced: true,
+      eligible: false,
+      consistent: false,
+      progressed: false,
+      reason: "PAYLOAD_ERROR",
+      detail: error instanceof Error ? error.message : String(error),
+      cycle: null,
+      zeroFields: [],
+      changedTimestampFields: [],
+      unchangedTimestampFields: [],
+    };
+  }
+
+  const enforceCycleGating = !isCustom || hasCylinderCycleTimestamps(values);
+  if (!enforceCycleGating) {
+    return {
+      enforced: false,
+      eligible: true,
+      consistent: true,
+      progressed: true,
+      reason: "NO_CYCLE_GATING",
+      detail: "Custom layout without 6 cylinder timestamps",
+      cycle: null,
+      zeroFields: [],
+      changedTimestampFields: [],
+      unchangedTimestampFields: [],
+    };
+  }
+
+  const zeroFields = [];
+  const invalidFields = [];
+  const parsed = {};
+  for (const name of CYLINDER_CYCLE_TIMESTAMP_FIELDS) {
+    const bigintValue = parseNonNegativeBigInt(values[name]);
+    if (bigintValue === null) {
+      invalidFields.push(shortTimestampName(name));
+    } else if (bigintValue <= 0n) {
+      zeroFields.push(shortTimestampName(name));
+    } else {
+      parsed[name] = bigintValue;
+    }
+  }
+
+  if (invalidFields.length > 0) {
+    return {
+      enforced: true,
+      eligible: false,
+      consistent: false,
+      progressed: false,
+      reason: "INVALID_TIMESTAMPS",
+      detail: `Invalid timestamp values: ${invalidFields.join(", ")}`,
+      cycle: null,
+      zeroFields,
+      changedTimestampFields: [],
+      unchangedTimestampFields: [],
+    };
+  }
+
+  if (zeroFields.length > 0) {
+    return {
+      enforced: true,
+      eligible: false,
+      consistent: false,
+      progressed: false,
+      reason: "ZERO_TIMESTAMPS",
+      detail:
+        zeroFields.length === CYLINDER_CYCLE_TIMESTAMP_FIELDS.length
+          ? "All 6 cycle timestamps are 0 (uninitialized)"
+          : `${zeroFields.length}/6 cycle timestamps are 0: ${zeroFields.join(", ")}`,
+      cycle: null,
+      zeroFields,
+      changedTimestampFields: [],
+      unchangedTimestampFields: [],
+    };
+  }
+
+  if (!isConsistentCylinderCycle(parsed)) {
+    return {
+      enforced: true,
+      eligible: false,
+      consistent: false,
+      progressed: false,
+      reason: "INCONSISTENT_CYCLE",
+      detail: describeCycleInconsistency(parsed),
+      cycle: parsed,
+      zeroFields: [],
+      changedTimestampFields: [],
+      unchangedTimestampFields: [],
+    };
+  }
+
+  if (previousCycle) {
+    const advancedFields = [];
+    const regressedFields = [];
+    const unchangedFields = [];
+    for (const name of CYLINDER_CYCLE_TIMESTAMP_FIELDS) {
+      if (parsed[name] > previousCycle[name]) advancedFields.push(shortTimestampName(name));
+      else if (parsed[name] < previousCycle[name]) regressedFields.push(shortTimestampName(name));
+      else unchangedFields.push(shortTimestampName(name));
+    }
+    const allAdvanced = advancedFields.length === CYLINDER_CYCLE_TIMESTAMP_FIELDS.length;
+    const allReset = regressedFields.length === CYLINDER_CYCLE_TIMESTAMP_FIELDS.length;
+
+    if (!allAdvanced && !allReset) {
+      if (unchangedFields.length === CYLINDER_CYCLE_TIMESTAMP_FIELDS.length) {
+        return {
+          enforced: true,
+          eligible: false,
+          consistent: true,
+          progressed: false,
+          reason: "CYCLE_NOT_PROGRESSED",
+          detail: "All 6 cycle timestamps match the last published cycle",
+          cycle: parsed,
+          zeroFields: [],
+          changedTimestampFields: [],
+          unchangedTimestampFields: unchangedFields,
+        };
+      }
+      const changedTimestampFields = [...advancedFields, ...regressedFields];
+      return {
+        enforced: true,
+        eligible: false,
+        consistent: true,
+        progressed: false,
+        reason: "PARTIAL_TIMESTAMP_PROGRESSION",
+        detail: `Only ${changedTimestampFields.length}/6 timestamps changed (${changedTimestampFields.join(", ")}); waiting for all 6 to advance together`,
+        cycle: parsed,
+        zeroFields: [],
+        changedTimestampFields,
+        unchangedTimestampFields: unchangedFields,
+      };
+    }
+  }
+
+  return {
+    enforced: true,
+    eligible: true,
+    consistent: true,
+    progressed: true,
+    reason: "VALID_CYCLE",
+    detail: "Complete monotonic 6-timestamp cycle",
+    cycle: parsed,
+    zeroFields: [],
+    changedTimestampFields: [],
+    unchangedTimestampFields: [],
   };
 }
 
@@ -146,12 +352,14 @@ async function runWithConcurrency(items, concurrency, worker) {
 // Keep the last successfully delivered cycle timestamps separately for every FB/DB.
 export function createModbusDatablockPublisher(
   publishPayload,
-  { concurrency = DEFAULT_PUBLISH_CONCURRENCY } = {},
+  { concurrency = DEFAULT_PUBLISH_CONCURRENCY, onRoundEvaluated } = {},
 ) {
   const lastPublished = new Map();
   let destination;
 
-  return async (config, dataBlocks) => {
+  const blockKey = (block) => JSON.stringify([block.startAddress, block.topic]);
+
+  const publish = async (config, dataBlocks) => {
     const nextDestination = JSON.stringify(
       ["protocol", "host", "port", "username", "password", "clientId", "qos"].map(
         (key) => config.mqtt?.[key],
@@ -162,7 +370,6 @@ export function createModbusDatablockPublisher(
       destination = nextDestination;
     }
 
-    const blockKey = (block) => JSON.stringify([block.startAddress, block.topic]);
     const activeKeys = new Set(dataBlocks.map(blockKey));
     for (const key of lastPublished.keys()) {
       if (!activeKeys.has(key)) lastPublished.delete(key);
@@ -172,57 +379,80 @@ export function createModbusDatablockPublisher(
     const isTestMode = config.testMode === true;
     const tasks = [];
     const errors = [];
+    const roundReports = new Map();
 
     for (const block of dataBlocks) {
       const key = blockKey(block);
+      const previousCycle = lastPublished.get(key) ?? null;
+      const gate = evaluateDatablockPublishGate(block.values, previousCycle, { isCustom });
       let payload;
       try {
-        payload = isCustom ? block.values : mqttPayload(block.values);
+        payload = buildDatablockMqttPayload(block.values, { isCustom });
       } catch (error) {
+        roundReports.set(key, {
+          gate,
+          attempted: false,
+          delivered: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
         errors.push(error);
         continue;
       }
 
-      const enforceCycleGating = !isCustom || hasCylinderCycleTimestamps(block.values);
-      const cycle = enforceCycleGating
-        ? extractCylinderCycleTimestamps(block.values)
-        : null;
-      const consistent = cycle !== null && isConsistentCylinderCycle(cycle);
-
-      if (enforceCycleGating && !isTestMode) {
-        if (!consistent) continue;
-        if (!hasCycleProgressed(lastPublished.get(key), cycle)) continue;
+      if (gate.enforced && !isTestMode && !gate.eligible) {
+        roundReports.set(key, {
+          gate,
+          attempted: false,
+          delivered: false,
+          error: null,
+        });
+        continue;
       }
+
+      roundReports.set(key, {
+        gate,
+        attempted: true,
+        delivered: false,
+        error: null,
+      });
 
       tasks.push({
         key,
         topic: block.topic,
         payload,
-        cycle: consistent ? cycle : null,
+        cycle: gate.consistent ? gate.cycle : null,
       });
     }
 
     if (tasks.length === 0) {
+      if (typeof onRoundEvaluated === "function") onRoundEvaluated(roundReports);
       if (errors.length > 0) throw errors[0];
       return lastPublished.size > 0 || Boolean(config.mqtt?.host);
     }
 
     let published = true;
     await runWithConcurrency(tasks, concurrency, async (task) => {
+      const report = roundReports.get(task.key);
       try {
         const delivered = await publishPayload(config.mqtt, task.topic, task.payload);
         if (delivered) {
+          if (report) report.delivered = true;
           if (task.cycle) lastPublished.set(task.key, task.cycle);
         } else {
           published = false;
         }
       } catch (error) {
         published = false;
+        if (report) report.error = error instanceof Error ? error.message : String(error);
         errors.push(error);
       }
     });
 
+    if (typeof onRoundEvaluated === "function") onRoundEvaluated(roundReports);
     if (errors.length > 0) throw errors[0];
     return published;
   };
+
+  publish.getLastPublishedCycle = (block) => lastPublished.get(blockKey(block)) ?? null;
+  return publish;
 }

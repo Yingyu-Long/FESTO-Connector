@@ -41,7 +41,6 @@ export default function Modbus() {
     ? saved.registers.map((r, i) => ({ id: i, name: String(r?.name ?? ""), registerType: String(r?.registerType ?? "Holding register"), address: String(r?.address ?? ""), dataType: String(r?.dataType ?? "UInt16") }))
     : [createRegister(0)]);
   const [topics, setTopics] = useState<string[]>(() => Array.isArray(saved.blockTopics) ? saved.blockTopics.map((topic) => String(topic ?? "")) : [""]);
-  const [testMode, setTestMode] = useState(saved.testMode === true);
   const [countValid, setCountValid] = useState(true);
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState<"" | "testing" | "saving" | "importing" | "downloading">("");
@@ -88,7 +87,7 @@ export default function Modbus() {
     port: Number(values.port), unitId: Number(values.unitId), timeout: Number(values.timeout), polling: Number(values.polling),
     readMode: values.readMode,
     ...(byDatablocks ? {
-      layoutMode: values.layoutMode, endian: values.endian, testMode,
+      layoutMode: values.layoutMode, endian: values.endian, testMode: false,
       startAddress: Number(values.startAddress), registerCount: Number(values.registerCount),
       blockTopics: activeTopics.map((topic) => topic.trim()),
       ...(custom ? { fields: fields.map(({ name, dataType, bitWidth }) => ({ name: name.trim(), dataType, bitWidth: Number(bitWidth) })) } : {}),
@@ -126,7 +125,7 @@ export default function Modbus() {
       }
       saveConnection({ recordId: editing?.recordId, id: config.id, protocol: "modbus.tcp", host: config.host, port: String(config.port), ...result,
         details: byDatablocks ? `${custom ? "Custom layout" : "Standard FB"}: ${blockCount} datablocks · ${size} registers/block · ${values.polling} ms` : `${registers.length} registers · ${values.polling} ms`,
-        config: { ...values, id: config.id, host: config.host, testMode, fields: fields.map(({ name, dataType, bitWidth }) => ({ name, dataType, bitWidth })), registers, blockTopics: (byDatablocks ? activeTopics : topics).map((topic) => topic.trim()) },
+        config: { ...values, id: config.id, host: config.host, testMode: false, fields: fields.map(({ name, dataType, bitWidth }) => ({ name, dataType, bitWidth })), registers, blockTopics: (byDatablocks ? activeTopics : topics).map((topic) => topic.trim()) },
       });
       await saveCurrentConfiguration(); navigate("/dashboard");
     } finally { setBusy(""); }
@@ -244,10 +243,6 @@ export default function Modbus() {
               </div> : <label className="fwe-field"><span>MQTT topic</span><span className="fwe-input-wrap"><input readOnly value={`festo/plc/${values.id.trim()}`} /></span></label>}
               <div className="fwe-modbus-polling">
                 <Field label="Polling interval" type="number" value={values.polling} onChange={set("polling")} suffix="ms" />
-                {byDatablocks && !custom && <div className="fwe-field">
-                  <span>Test mode</span>
-                  <button type="button" role="switch" aria-label="Test mode" aria-checked={testMode} className="fwe-modbus-test-mode" onClick={() => { setTestMode((previous) => !previous); resetResult(); }} />
-                </div>}
               </div>
             </section>
           </fieldset>

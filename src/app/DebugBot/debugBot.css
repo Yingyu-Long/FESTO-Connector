@@ -652,17 +652,17 @@
 
 .dbot-diag-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
   padding: 5px;
   border-radius: 12px;
   background: #edf2f7;
   border: 1px solid #e1e9f1;
 }
 
-@media (max-width: 780px) {
+@media (max-width: 900px) {
   .dbot-diag-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 }
 
@@ -985,6 +985,14 @@
   color: #b82b39;
 }
 
+.dbot-kpi-card > strong.is-warn-num {
+  color: #a66a08;
+}
+
+.dbot-kpi-card > strong.is-violet {
+  color: #5d3ea8;
+}
+
 .dbot-kpi-card > strong.dbot-mono {
   font-size: 13.5px;
   font-family: var(--font-mono);
@@ -1031,6 +1039,11 @@
 .dbot-pill.is-error {
   background: #fdebec;
   color: #b82b39;
+}
+
+.dbot-pill.is-violet {
+  background: #f2eefc;
+  color: #5b3ca6;
 }
 
 .dbot-pill.is-neutral {
@@ -1167,6 +1180,40 @@
   font-family: var(--font-mono);
   font-size: 12px;
   color: #1f3c56;
+}
+
+.dbot-reason-cell {
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #344e67;
+}
+
+.dbot-cell-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: #6b8094;
+  font-weight: 400;
+}
+
+.dbot-inline-payload summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0070b8;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dbot-inline-payload pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #f3f7fa;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-width: 340px;
+  max-height: 200px;
+  overflow: auto;
 }
 
 /* Disclosure Rows & Events */

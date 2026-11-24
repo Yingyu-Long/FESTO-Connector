@@ -181,7 +181,7 @@ export async function reconnect(connection: SavedConnection): Promise<RescanResu
             layoutMode: config.layoutMode ?? "standard",
             fields: config.fields,
             endian: config.endian ?? "Big-Endian",
-            testMode: config.testMode === true,
+            testMode: false,
             startAddress:
               config.startAddress === undefined
                 ? MODBUS_DATABLOCK_DEFAULT_START_ADDRESS

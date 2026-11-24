@@ -54,6 +54,18 @@ interface ChatMessage {
   createdAt: string;
 }
 
+interface CylinderPublishGate {
+  enforced: boolean;
+  eligible: boolean;
+  consistent: boolean;
+  progressed: boolean;
+  reason: string;
+  detail: string;
+  zeroFields?: string[];
+  changedTimestampFields?: string[];
+  unchangedTimestampFields?: string[];
+}
+
 interface CylinderFreshnessItem {
   blockIndex: number;
   startAddress: number;
@@ -62,12 +74,28 @@ interface CylinderFreshnessItem {
   cycleCounter: unknown;
   firstSeenAt: string | null;
   lastDataUpdatedAt: string | null;
+  lastValidCycleAt?: string | null;
+  lastRawChangedAt?: string | null;
+  lastRejectedChangeAt?: string | null;
   hasUpdatedSinceStart: boolean;
   updateCount: number;
+  validCycleCount?: number;
+  rawChangeCount?: number;
+  publishCount?: number;
   staleDurationMs: number | null;
   staleDurationSeconds: number | null;
   isStale: boolean;
-  freshnessStatus: "FRESH" | "STALE" | "NEVER_UPDATED" | "NO_DATA";
+  freshnessStatus:
+    | "FRESH"
+    | "STALE"
+    | "NEVER_UPDATED"
+    | "NO_DATA"
+    | "READ_FAILED"
+    | "REJECTED_CHANGE";
+  nonFreshReason?: "READ_FAILED" | "DATA_UNCHANGED" | "PARTIAL_CHANGE_REJECTED" | null;
+  reasonDetail?: string | null;
+  changedFields?: string[];
+  publishGate?: CylinderPublishGate | null;
 }
 
 interface DatablocksInspectResult {
@@ -81,6 +109,10 @@ interface DatablocksInspectResult {
     pollingMs: number;
     pollingStatus: string;
     lastError?: string | null;
+    lastReadError?: string | null;
+    lastPublishError?: string | null;
+    consecutiveReadErrors?: number;
+    lastReadAt?: string | null;
     lastPollAt?: string | null;
     checkedAt?: string;
     summary: {
@@ -89,10 +121,69 @@ interface DatablocksInspectResult {
       freshCount: number;
       staleCount: number;
       neverUpdatedCount: number;
+      readFailedCount?: number;
+      unchangedCount?: number;
+      rejectedChangeCount?: number;
       maxStaleDurationMs: number | null;
       maxStaleDurationSeconds: number | null;
     };
     cylinders: CylinderFreshnessItem[];
+  }>;
+}
+
+interface ModbusPollerTarget {
+  plcId: string;
+  namespace: string;
+  endpoint: string;
+  layoutMode: string;
+  endian: string;
+  pollingMs: number;
+  pollingStatus: string;
+  blockCount: number;
+  mqttConfigured: boolean;
+}
+
+interface TestModeBlockResult {
+  blockIndex: number;
+  startAddress: number;
+  topic: string;
+  partNumber: string | null;
+  cycleCounter: unknown;
+  published: boolean;
+  publishError: string | null;
+  normalGatePassed: boolean;
+  normalGateReason: string;
+  normalGateDetail: string;
+  payload: Record<string, unknown> | null;
+}
+
+interface TestModePublishResult {
+  ok: boolean;
+  found: boolean;
+  durationSeconds?: number;
+  elapsedMs?: number;
+  totalPublished?: number;
+  totalFailed?: number;
+  message?: string;
+  error?: string;
+  availablePollers?: ModbusPollerTarget[];
+  results?: Array<{
+    plcId: string;
+    namespace: string;
+    endpoint: string;
+    layoutMode: string;
+    endian: string;
+    mqttConfigured: boolean;
+    brokerUrl: string | null;
+    readOk: boolean;
+    readLatencyMs: number | null;
+    readError: string | null;
+    rounds: number;
+    totalBlocks: number;
+    publishedCount: number;
+    failedCount: number;
+    blockedInNormalCount: number;
+    blocks: TestModeBlockResult[];
   }>;
 }
 
@@ -218,7 +309,8 @@ interface SystemHealthResult {
   }>;
 }
 
-type DiagTab = "freshness" | "mqtt" | "backlog" | "audit";
+type DiagTab = "freshness" | "test-mode" | "mqtt" | "backlog" | "audit";
+type FreshnessFilter = "all" | "non_fresh" | "read_failed" | "unchanged" | "rejected" | "fresh";
 type StatusTone = "ok" | "warn" | "error" | null;
 
 function Icon({ name, size = 16, className = "" }: { name: string; size?: number; className?: string }) {
@@ -335,6 +427,12 @@ function Icon({ name, size = 16, className = "" }: { name: string; size?: number
       return (
         <svg {...common}>
           <polygon points="5 3 19 12 5 21 5 3" />
+        </svg>
+      );
+    case "zap":
+      return (
+        <svg {...common}>
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
         </svg>
       );
     case "arrow-right":
@@ -472,6 +570,85 @@ function formatUptime(seconds: number, zh: boolean): string {
   return zh ? `${hours} 小时 ${remMin} 分` : `${hours}h ${remMin}m`;
 }
 
+function formatGateReason(
+  reason: string | undefined,
+  detail: string | undefined,
+  zh: boolean,
+  gate?: CylinderPublishGate | null,
+): string {
+  if (!reason) return detail || "—";
+  switch (reason) {
+    case "VALID_CYCLE":
+      return zh ? "符合正常发送标准" : "Meets publish standard";
+    case "NO_CYCLE_GATING":
+      return zh ? "自定义布局（无 6 时间戳门控）" : "Custom layout (no cycle gating)";
+    case "ZERO_TIMESTAMPS": {
+      const zeros = gate?.zeroFields ?? [];
+      if (zeros.length >= 6) {
+        return zh ? "6 个关键时间戳全为 0（未初始化）" : "All 6 cycle timestamps are 0";
+      }
+      return zh
+        ? `存在 0 值时间戳（${zeros.length > 0 ? zeros.join(", ") : detail || "部分未赋值"}）`
+        : detail || "Contains zero cycle timestamps";
+    }
+    case "INVALID_TIMESTAMPS":
+      return zh ? `时间戳格式非法（${detail || ""}）` : detail || "Invalid timestamp values";
+    case "INCONSISTENT_CYCLE":
+      return zh
+        ? `6 个时间戳不构成完整单调周期（${detail || "动作中或字节序异常"}）`
+        : detail || "Inconsistent / torn 6-timestamp cycle";
+    case "PARTIAL_TIMESTAMP_PROGRESSION": {
+      const changed = gate?.changedTimestampFields ?? [];
+      return zh
+        ? `仅部分时间戳变化（${changed.length > 0 ? changed.join(", ") : "未满 6 项"}），未构成完整新周期`
+        : detail || "Only a subset of the 6 timestamps changed";
+    }
+    case "CYCLE_NOT_PROGRESSED":
+      return zh ? "6 个关键时间戳较上次未推进" : "All 6 cycle timestamps unchanged since last publish";
+    case "PAYLOAD_ERROR":
+      return zh
+        ? "时间戳超出 JSON 安全整数（常见于字节序 Big/Little-Endian 选错）"
+        : detail || "Unsafe JSON timestamp (check Endian setting)";
+    default:
+      return detail || reason;
+  }
+}
+
+function formatCylinderDiagnosis(c: CylinderFreshnessItem, zh: boolean): string {
+  if (c.freshnessStatus === "FRESH") {
+    const count = c.publishCount ?? c.validCycleCount ?? c.updateCount;
+    return zh ? `符合发送标准 · 已有效更新 ${count} 次` : `Valid cycle · ${count} valid updates`;
+  }
+  if (c.nonFreshReason === "READ_FAILED" || c.freshnessStatus === "READ_FAILED" || c.freshnessStatus === "NO_DATA") {
+    return c.reasonDetail
+      ? zh
+        ? `Modbus 读取失败：${c.reasonDetail}`
+        : `Modbus read failed: ${c.reasonDetail}`
+      : zh
+        ? "尚未从 PLC 成功读到数据"
+        : "No data read from PLC yet";
+  }
+  if (c.nonFreshReason === "PARTIAL_CHANGE_REJECTED" || c.freshnessStatus === "REJECTED_CHANGE") {
+    const fields = (c.changedFields ?? []).map((f) => f.replace(/^timestamp_/, ""));
+    const fieldText =
+      fields.length > 0
+        ? zh
+          ? `变动字段 [${fields.slice(0, 3).join(", ")}${fields.length > 3 ? ` 等 ${fields.length} 项` : ""}]，`
+          : `Changed [${fields.slice(0, 3).join(", ")}${fields.length > 3 ? ` +${fields.length - 3}` : ""}] — `
+        : "";
+    const gateText = formatGateReason(c.publishGate?.reason, c.publishGate?.detail, zh, c.publishGate);
+    return `${fieldText}${gateText}`;
+  }
+  // DATA_UNCHANGED
+  if (c.publishGate?.enforced && !c.publishGate.consistent) {
+    const gateHint = formatGateReason(c.publishGate.reason, c.publishGate.detail, zh, c.publishGate);
+    return zh
+      ? `Modbus 读取正常，数据未变化（且当前值：${gateHint}）`
+      : `PLC read OK, data unchanged (current snapshot: ${gateHint})`;
+  }
+  return zh ? "Modbus 读取正常，寄存器值无变化" : "PLC read OK, register values unchanged";
+}
+
 function ToolTraceCard({ trace, zh }: { trace: ToolCallTrace; zh: boolean }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -543,10 +720,18 @@ export default function DebugBot() {
   // Quick Diagnostics workbench state (works with or without LLM API key)
   const [activeDiagTab, setActiveDiagTab] = useState<DiagTab>("freshness");
   const [staleThresholdSeconds, setStaleThresholdSeconds] = useState(60);
-  const [datablocksFilter, setDatablocksFilter] = useState<"all" | "stale">("all");
+  const [datablocksFilter, setDatablocksFilter] = useState<FreshnessFilter>("all");
   const [datablocksSort, setDatablocksSort] = useState<"stale" | "index">("stale");
   const [datablocksDiag, setDatablocksDiag] = useState<DatablocksInspectResult | null>(null);
   const [datablocksLoading, setDatablocksLoading] = useState(false);
+
+  // Test Mode (on-demand diagnostic publish, no persistent switch)
+  const [modbusTargets, setModbusTargets] = useState<ModbusPollerTarget[]>([]);
+  const [testModePlcId, setTestModePlcId] = useState("");
+  const [testModeDuration, setTestModeDuration] = useState(0);
+  const [testModeResult, setTestModeResult] = useState<TestModePublishResult | null>(null);
+  const [testModeLoading, setTestModeLoading] = useState(false);
+
   const [mqttTopicInput, setMqttTopicInput] = useState("");
   const [mqttDuration, setMqttDuration] = useState(3);
   const [mqttDiag, setMqttDiag] = useState<MqttSubscribeResult | null>(null);
@@ -607,9 +792,26 @@ export default function DebugBot() {
     }
   }, [zh]);
 
+  const loadModbusTargets = useCallback(async () => {
+    try {
+      const res = await fetch("/api/debug-bot/modbus-pollers", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { pollers?: ModbusPollerTarget[] };
+      setModbusTargets(data.pollers ?? []);
+    } catch {
+      // Ignore silent refresh failures; main loadError banner handles unreachable backend.
+    }
+  }, []);
+
   useEffect(() => {
     void loadInitialState();
   }, [loadInitialState]);
+
+  useEffect(() => {
+    if (activeView === "diagnostics") {
+      void loadModbusTargets();
+    }
+  }, [activeView, activeDiagTab, loadModbusTargets]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -816,6 +1018,33 @@ export default function DebugBot() {
     }
   }
 
+  async function runTestModePublish() {
+    setTestModeLoading(true);
+    try {
+      const res = await fetch("/api/debug-bot/test-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(testModePlcId ? { plcId: testModePlcId } : {}),
+          durationSeconds: testModeDuration,
+        }),
+      });
+      const data = (await res.json()) as TestModePublishResult;
+      setTestModeResult(data);
+      if (Array.isArray(data.availablePollers)) {
+        setModbusTargets(data.availablePollers);
+      }
+    } catch (err) {
+      setTestModeResult({
+        ok: false,
+        found: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTestModeLoading(false);
+    }
+  }
+
   async function runMqttSample() {
     setMqttLoading(true);
     try {
@@ -939,9 +1168,26 @@ export default function DebugBot() {
     ? null
     : !datablocksDiag.found
       ? "warn"
-      : datablocksDiag.pollers.some((p) => p.summary.staleCount > 0)
+      : datablocksDiag.pollers.some(
+            (p) => (p.summary.readFailedCount ?? 0) > 0 || p.summary.staleCount > 0,
+          )
         ? "error"
-        : "ok";
+        : datablocksDiag.pollers.some(
+              (p) =>
+                (p.summary.rejectedChangeCount ?? 0) > 0 || (p.summary.unchangedCount ?? 0) > 0,
+            )
+          ? "warn"
+          : "ok";
+
+  const testModeTone: StatusTone = !testModeResult
+    ? null
+    : !testModeResult.found
+      ? "warn"
+      : testModeResult.ok
+        ? "ok"
+        : (testModeResult.totalPublished ?? 0) > 0
+          ? "warn"
+          : "error";
 
   const mqttTone: StatusTone = !mqttDiag
     ? null
@@ -976,28 +1222,35 @@ export default function DebugBot() {
     {
       id: "freshness",
       icon: "clock",
-      label: zh ? "气缸更新监测" : "Cylinder Freshness",
+      label: zh ? "气缸更新监测" : "Freshness",
       tone: freshnessTone,
       loading: datablocksLoading,
     },
     {
+      id: "test-mode",
+      icon: "zap",
+      label: "Test Mode",
+      tone: testModeTone,
+      loading: testModeLoading,
+    },
+    {
       id: "mqtt",
       icon: "radio",
-      label: zh ? "MQTT 实时采样" : "MQTT Sampler",
+      label: zh ? "MQTT 采样" : "MQTT Sampler",
       tone: mqttTone,
       loading: mqttLoading,
     },
     {
       id: "backlog",
       icon: "layers",
-      label: zh ? "Broker 堆积诊断" : "Broker Backlog",
+      label: zh ? "Broker 堆积" : "Broker Backlog",
       tone: backlogTone,
       loading: backlogLoading,
     },
     {
       id: "audit",
       icon: "shield",
-      label: zh ? "配置与运行体检" : "Config & Health",
+      label: zh ? "配置与体检" : "Config & Health",
       tone: auditTone,
       loading: auditLoading,
     },
@@ -1240,11 +1493,11 @@ export default function DebugBot() {
             <section className="dbot-panel">
               <div className="dbot-panel-head">
                 <div className="dbot-panel-title-block">
-                  <h2>{zh ? "Modbus 气缸数据更新监测" : "Modbus Cylinder Data Freshness"}</h2>
+                  <h2>{zh ? "Modbus 气缸数据新鲜度监测" : "Modbus Cylinder Data Freshness"}</h2>
                   <p>
                     {zh
-                      ? "扫描运行中的 Modbus Datablock 轮询器，定位超时未更新或自监听起从未变化的气缸。"
-                      : "Inspect active Modbus datablock pollers to find stale or unchanged cylinders."}
+                      ? "检测每个气缸是否为 Fresh 数据，并自动分辨：读不上数据、数据未更新，或部分数据已变化但不符合新发送标准。"
+                      : "Check cylinder freshness and distinguish PLC read failures, static unchanged data, and partial changes blocked by publish rules."}
                   </p>
                 </div>
                 <button
@@ -1279,14 +1532,20 @@ export default function DebugBot() {
                     <option value={3600}>{zh ? "1 小时" : "1 hour"}</option>
                   </select>
                 </label>
-                <label className="dbot-field-inline is-md">
-                  <span>{zh ? "筛选显示" : "Filter"}</span>
+                <label className="dbot-field-inline is-lg">
+                  <span>{zh ? "筛选分类" : "Filter"}</span>
                   <select
                     value={datablocksFilter}
-                    onChange={(e) => setDatablocksFilter(e.target.value as "all" | "stale")}
+                    onChange={(e) => setDatablocksFilter(e.target.value as FreshnessFilter)}
                   >
                     <option value="all">{zh ? "全部气缸" : "All Cylinders"}</option>
-                    <option value="stale">{zh ? "仅看超时未更新" : "Stale Only"}</option>
+                    <option value="non_fresh">{zh ? "全部非 Fresh 气缸" : "All Non-Fresh"}</option>
+                    <option value="read_failed">{zh ? "仅看：读不上数据" : "Read Failed Only"}</option>
+                    <option value="unchanged">{zh ? "仅看：数据未更新" : "Data Unchanged Only"}</option>
+                    <option value="rejected">
+                      {zh ? "仅看：有变化但不符标准" : "Gate Blocked Only"}
+                    </option>
+                    <option value="fresh">{zh ? "仅看：正常更新 (Fresh)" : "Fresh Only"}</option>
                   </select>
                 </label>
                 <label className="dbot-field-inline is-lg">
@@ -1306,8 +1565,8 @@ export default function DebugBot() {
                   <Icon name="clock" size={20} />
                   <span>
                     {zh
-                      ? "点击右上角「开始检测」查看所有气缸的数据更新状态。"
-                      : "Click Check Freshness to inspect cylinder update intervals."}
+                      ? "点击右上角「开始检测」分析气缸新鲜度及非 Fresh 根因。"
+                      : "Click Check Freshness to inspect cylinder freshness and non-fresh root causes."}
                   </span>
                 </div>
               ) : !datablocksDiag.found ? (
@@ -1315,15 +1574,41 @@ export default function DebugBot() {
               ) : (
                 <div className="dbot-diag-body">
                   {datablocksDiag.pollers.map((p) => {
-                    const visibleCylinders = (
-                      datablocksFilter === "stale"
-                        ? p.cylinders.filter((c) => c.isStale)
-                        : [...p.cylinders]
-                    ).sort((a, b) => {
-                      if (datablocksSort === "index") return a.blockIndex - b.blockIndex;
-                      const diff = (b.staleDurationMs ?? -1) - (a.staleDurationMs ?? -1);
-                      return diff !== 0 ? diff : a.blockIndex - b.blockIndex;
-                    });
+                    const readFailedCount =
+                      p.summary.readFailedCount ??
+                      p.cylinders.filter((c) => c.nonFreshReason === "READ_FAILED").length;
+                    const unchangedCount =
+                      p.summary.unchangedCount ??
+                      p.cylinders.filter((c) => c.nonFreshReason === "DATA_UNCHANGED").length;
+                    const rejectedChangeCount =
+                      p.summary.rejectedChangeCount ??
+                      p.cylinders.filter((c) => c.nonFreshReason === "PARTIAL_CHANGE_REJECTED")
+                        .length;
+
+                    const visibleCylinders = p.cylinders
+                      .filter((c) => {
+                        if (datablocksFilter === "all") return true;
+                        if (datablocksFilter === "fresh") return c.freshnessStatus === "FRESH";
+                        if (datablocksFilter === "non_fresh") return c.freshnessStatus !== "FRESH";
+                        if (datablocksFilter === "read_failed")
+                          return c.nonFreshReason === "READ_FAILED";
+                        if (datablocksFilter === "unchanged")
+                          return c.nonFreshReason === "DATA_UNCHANGED";
+                        if (datablocksFilter === "rejected")
+                          return c.nonFreshReason === "PARTIAL_CHANGE_REJECTED";
+                        return true;
+                      })
+                      .sort((a, b) => {
+                        if (datablocksSort === "index") return a.blockIndex - b.blockIndex;
+                        const aVal =
+                          a.staleDurationMs ??
+                          (a.nonFreshReason === "READ_FAILED" ? Number.MAX_SAFE_INTEGER : -1);
+                        const bVal =
+                          b.staleDurationMs ??
+                          (b.nonFreshReason === "READ_FAILED" ? Number.MAX_SAFE_INTEGER : -1);
+                        const diff = bVal - aVal;
+                        return diff !== 0 ? diff : a.blockIndex - b.blockIndex;
+                      });
 
                     return (
                       <div key={`${p.namespace}-${p.plcId}`} className="dbot-poller-block">
@@ -1334,48 +1619,93 @@ export default function DebugBot() {
                             <span className="dbot-meta-chip">{p.endian}</span>
                           </div>
                           <div className="dbot-poller-runtime">
-                            <span className="dbot-pill is-ok">{p.pollingStatus}</span>
+                            <span
+                              className={`dbot-pill ${
+                                p.pollingStatus === "HEALTHY"
+                                  ? "is-ok"
+                                  : p.pollingStatus === "MQTT_NOT_CONFIGURED"
+                                    ? "is-warn"
+                                    : "is-error"
+                              }`}
+                            >
+                              {p.pollingStatus}
+                            </span>
                             <span className="dbot-meta-muted">{p.pollingMs} ms</span>
                           </div>
                         </div>
 
+                        {p.lastReadError && (
+                          <div className="dbot-error-box">
+                            <strong>
+                              {zh ? "Modbus 读取失败（压根读不上数据）：" : "Modbus Read Failed: "}
+                            </strong>
+                            <span>{p.lastReadError}</span>
+                          </div>
+                        )}
+
+                        {!p.lastReadError && p.lastPublishError && (
+                          <div className="dbot-warning-box">
+                            <strong>
+                              {zh ? "Modbus 读取正常，但 MQTT 推送失败：" : "Modbus Read OK, MQTT Publish Failed: "}
+                            </strong>
+                            <span>{p.lastPublishError}</span>
+                          </div>
+                        )}
+
                         <div className="dbot-kpi-grid cols-4">
                           <div className="dbot-kpi-card">
-                            <span>{zh ? "气缸总数" : "Total Cylinders"}</span>
-                            <strong>{p.summary.totalCylinders}</strong>
-                          </div>
-                          <div className="dbot-kpi-card">
-                            <span>
-                              {zh
-                                ? `超时未更新 (≥${p.summary.staleThresholdSeconds}s)`
-                                : `Stale (≥${p.summary.staleThresholdSeconds}s)`}
-                            </span>
-                            <strong className={p.summary.staleCount > 0 ? "is-danger" : "is-ok"}>
-                              {p.summary.staleCount} / {p.summary.totalCylinders}
+                            <span>{zh ? "正常更新 (Fresh)" : "Fresh"}</span>
+                            <strong className={p.summary.freshCount > 0 ? "is-ok" : ""}>
+                              {p.summary.freshCount} / {p.summary.totalCylinders}
                             </strong>
+                            <small>
+                              {zh
+                                ? `阈值 < ${p.summary.staleThresholdSeconds}s`
+                                : `Within ${p.summary.staleThresholdSeconds}s`}
+                            </small>
                           </div>
                           <div className="dbot-kpi-card">
-                            <span>{zh ? "自监听起未更新" : "Never Updated"}</span>
-                            <strong>{p.summary.neverUpdatedCount}</strong>
+                            <span>{zh ? "读不上数据" : "Read Failed"}</span>
+                            <strong className={readFailedCount > 0 ? "is-danger" : ""}>
+                              {readFailedCount}
+                            </strong>
+                            <small>
+                              {zh ? "PLC 断连 / 读取报错" : "PLC unreachable / read error"}
+                            </small>
                           </div>
                           <div className="dbot-kpi-card">
-                            <span>{zh ? "最长未更新时长" : "Longest Stale"}</span>
-                            <strong>{formatStaleDuration(p.summary.maxStaleDurationMs, zh)}</strong>
+                            <span>{zh ? "数据未更新" : "Data Unchanged"}</span>
+                            <strong className={unchangedCount > 0 ? "is-warn-num" : ""}>
+                              {unchangedCount}
+                            </strong>
+                            <small>
+                              {zh ? "最长未更新" : "Longest"}:{" "}
+                              {formatStaleDuration(p.summary.maxStaleDurationMs, zh)}
+                            </small>
+                          </div>
+                          <div className="dbot-kpi-card">
+                            <span>{zh ? "有变化但不符标准" : "Changed · Gate Blocked"}</span>
+                            <strong className={rejectedChangeCount > 0 ? "is-violet" : ""}>
+                              {rejectedChangeCount}
+                            </strong>
+                            <small>
+                              {zh ? "被 6 时间戳门控拦截" : "Blocked by publish criteria"}
+                            </small>
                           </div>
                         </div>
 
                         {p.summary.totalCylinders === 0 ? (
                           <div className="dbot-warning-box">
                             {zh
-                              ? `PLC「${p.plcId}」当前没有 Datablock 气缸数据（可能为寄存器单读模式或尚未完成首次读取）。`
-                              : `PLC "${p.plcId}" currently has 0 datablock cylinders (may be in register mode or awaiting first read).`}
+                              ? `PLC「${p.plcId}」当前没有配置 Datablock 气缸（可能为寄存器单读模式）。`
+                              : `PLC "${p.plcId}" has 0 configured datablock cylinders (may be in register mode).`}
                           </div>
                         ) : visibleCylinders.length === 0 ? (
                           <div className="dbot-diagnosis-banner is-ok">
                             <strong>
                               {zh
-                                ? `全部 ${p.summary.totalCylinders} 个气缸均在 ${p.summary.staleThresholdSeconds} 秒内有更新。`
-                                : `All ${p.summary.totalCylinders} cylinders updated within ${p.summary.staleThresholdSeconds}s.`}
+                                ? "当前筛选条件下没有匹配的气缸。"
+                                : "No cylinders match the current filter."}
                             </strong>
                           </div>
                         ) : (
@@ -1385,40 +1715,46 @@ export default function DebugBot() {
                                 <tr>
                                   <th>DB #</th>
                                   <th>Topic / Part</th>
-                                  <th>{zh ? "状态" : "Status"}</th>
+                                  <th>{zh ? "状态分类" : "Status"}</th>
+                                  <th>{zh ? "原因诊断" : "Diagnosis"}</th>
                                   <th>{zh ? "未更新时长" : "Stale For"}</th>
-                                  <th>{zh ? "最后更新" : "Last Updated"}</th>
-                                  <th>{zh ? "更新次数" : "Updates"}</th>
+                                  <th>{zh ? "有效更新" : "Valid Updates"}</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {visibleCylinders.map((c) => {
-                                  const pillClass =
-                                    c.freshnessStatus === "FRESH"
-                                      ? "is-ok"
-                                      : c.freshnessStatus === "STALE"
-                                        ? "is-error"
-                                        : "is-warn";
-                                  const statusText =
-                                    c.freshnessStatus === "FRESH"
+                                  const isFresh = c.freshnessStatus === "FRESH";
+                                  const isReadFailed = c.nonFreshReason === "READ_FAILED";
+                                  const isRejected =
+                                    c.nonFreshReason === "PARTIAL_CHANGE_REJECTED";
+                                  const pillClass = isFresh
+                                    ? "is-ok"
+                                    : isReadFailed
+                                      ? "is-error"
+                                      : isRejected
+                                        ? "is-violet"
+                                        : c.isStale
+                                          ? "is-warn"
+                                          : "is-neutral";
+                                  const statusText = isFresh
+                                    ? zh
+                                      ? "正常更新"
+                                      : "Fresh"
+                                    : isReadFailed
                                       ? zh
-                                        ? "正常更新"
-                                        : "Fresh"
-                                      : c.freshnessStatus === "STALE"
-                                        ? c.hasUpdatedSinceStart
+                                        ? "读不上数据"
+                                        : "Read Failed"
+                                      : isRejected
+                                        ? zh
+                                          ? "有变化但不符标准"
+                                          : "Gate Blocked"
+                                        : c.isStale
                                           ? zh
-                                            ? "超时未更新"
-                                            : "Stale"
+                                            ? "数据未更新（超时）"
+                                            : "Unchanged (Stale)"
                                           : zh
-                                            ? "超时（从未更新）"
-                                            : "Stale (Never)"
-                                        : c.freshnessStatus === "NEVER_UPDATED"
-                                          ? zh
-                                            ? "从未更新"
-                                            : "Never Updated"
-                                          : zh
-                                            ? "无数据"
-                                            : "No Data";
+                                            ? "数据未更新"
+                                            : "Unchanged";
                                   const durationText = formatStaleDuration(c.staleDurationMs, zh);
 
                                   return (
@@ -1431,7 +1767,12 @@ export default function DebugBot() {
                                         <code className="dbot-topic-code">{c.topic}</code>
                                       </td>
                                       <td>
-                                        <span className={`dbot-pill ${pillClass}`}>{statusText}</span>
+                                        <span className={`dbot-pill ${pillClass}`}>
+                                          {statusText}
+                                        </span>
+                                      </td>
+                                      <td className="dbot-reason-cell">
+                                        {formatCylinderDiagnosis(c, zh)}
                                       </td>
                                       <td className="dbot-num">
                                         <strong>
@@ -1439,17 +1780,27 @@ export default function DebugBot() {
                                             ? `≥ ${durationText}`
                                             : durationText}
                                         </strong>
+                                        {isRejected && c.lastRawChangedAt && (
+                                          <div className="dbot-cell-sub">
+                                            {zh ? "原始变化" : "Raw"}:{" "}
+                                            {formatLocalTime(c.lastRawChangedAt)}
+                                          </div>
+                                        )}
                                       </td>
                                       <td className="dbot-num dbot-muted-cell">
-                                        {c.lastDataUpdatedAt
-                                          ? formatLocalTime(c.lastDataUpdatedAt)
-                                          : c.firstSeenAt
-                                            ? zh
-                                              ? `始于 ${formatLocalTime(c.firstSeenAt)}`
-                                              : `since ${formatLocalTime(c.firstSeenAt)}`
-                                            : "—"}
+                                        <div>{c.validCycleCount ?? c.updateCount}</div>
+                                        <div className="dbot-cell-sub">
+                                          {c.lastValidCycleAt ?? c.lastDataUpdatedAt
+                                            ? formatLocalTime(
+                                                c.lastValidCycleAt ?? c.lastDataUpdatedAt,
+                                              )
+                                            : c.firstSeenAt
+                                              ? zh
+                                                ? `始于 ${formatLocalTime(c.firstSeenAt)}`
+                                                : `since ${formatLocalTime(c.firstSeenAt)}`
+                                              : "—"}
+                                        </div>
                                       </td>
-                                      <td className="dbot-num">{c.updateCount}</td>
                                     </tr>
                                   );
                                 })}
@@ -1460,6 +1811,249 @@ export default function DebugBot() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Tool 2: On-demand Modbus Test Mode Publish (No persistent switch) */}
+          {activeDiagTab === "test-mode" && (
+            <section className="dbot-panel">
+              <div className="dbot-panel-head">
+                <div className="dbot-panel-title-block">
+                  <h2>{zh ? "Modbus Test Mode 推流" : "Modbus Test Mode Publish"}</h2>
+                  <p>
+                    {zh
+                      ? "按需跳过 6 点时间戳发送门控，直接将当前读取到的气缸数据推流到 MQTT Broker；执行结束后自动恢复正常模式，无需手动开关。"
+                      : "Bypass 6-timestamp cycle gating on demand and publish current Modbus datablocks directly to MQTT. Stops automatically without a persistent switch."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="dbot-btn-primary"
+                  disabled={testModeLoading}
+                  onClick={() => void runTestModePublish()}
+                >
+                  <Icon name={testModeLoading ? "spinner" : "zap"} size={14} />
+                  {testModeLoading
+                    ? testModeDuration > 0
+                      ? zh
+                        ? `推流中 (${testModeDuration}s)…`
+                        : `Publishing (${testModeDuration}s)…`
+                      : zh
+                        ? "推流中…"
+                        : "Publishing…"
+                    : zh
+                      ? "开始测试推流"
+                      : "Run Test Publish"}
+                </button>
+              </div>
+
+              <div className="dbot-toolbar">
+                <label className="dbot-field-inline is-grow">
+                  <span>{zh ? "目标 PLC" : "Target PLC"}</span>
+                  <select
+                    value={testModePlcId}
+                    onChange={(e) => setTestModePlcId(e.target.value)}
+                  >
+                    <option value="">
+                      {zh
+                        ? `全部运行中的 Modbus Datablock PLC (${modbusTargets.length})`
+                        : `All active Modbus Datablock PLCs (${modbusTargets.length})`}
+                    </option>
+                    {modbusTargets.map((target) => (
+                      <option key={`${target.namespace}-${target.plcId}`} value={target.plcId}>
+                        {target.plcId} · {target.endpoint} ({target.blockCount} DB)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="dbot-field-inline is-lg">
+                  <span>{zh ? "推流方式" : "Run Mode"}</span>
+                  <select
+                    value={testModeDuration}
+                    onChange={(e) => setTestModeDuration(Number(e.target.value))}
+                  >
+                    <option value={0}>{zh ? "单次推送（1 轮）" : "Single shot (1 round)"}</option>
+                    <option value={3}>{zh ? "连续推送 3 秒" : "Continuous 3s"}</option>
+                    <option value={5}>{zh ? "连续推送 5 秒" : "Continuous 5s"}</option>
+                    <option value={10}>{zh ? "连续推送 10 秒" : "Continuous 10s"}</option>
+                  </select>
+                </label>
+              </div>
+
+              {!testModeResult ? (
+                <div className="dbot-panel-empty">
+                  <Icon name="zap" size={20} />
+                  <span>
+                    {zh
+                      ? "点击右上角「开始测试推流」执行无门控测试发送，并对比正常模式的拦截原因。"
+                      : "Click Run Test Publish to send current datablocks without cycle gating and inspect normal-mode gate verdicts."}
+                  </span>
+                </div>
+              ) : !testModeResult.found ? (
+                <div className="dbot-warning-box">
+                  {testModeResult.message || testModeResult.error}
+                </div>
+              ) : (
+                <div className="dbot-diag-body">
+                  {(testModeResult.results ?? []).map((plc) => (
+                    <div key={`${plc.namespace}-${plc.plcId}`} className="dbot-poller-block">
+                      <div className="dbot-poller-meta">
+                        <div className="dbot-poller-id">
+                          <strong>{plc.plcId}</strong>
+                          <code>{plc.endpoint}</code>
+                          <span className="dbot-meta-chip">{plc.endian}</span>
+                          {plc.brokerUrl && <span className="dbot-meta-muted">→ {plc.brokerUrl}</span>}
+                        </div>
+                        <div className="dbot-poller-runtime">
+                          <span
+                            className={`dbot-pill ${
+                              plc.readOk && plc.failedCount === 0
+                                ? "is-ok"
+                                : plc.readOk
+                                  ? "is-warn"
+                                  : "is-error"
+                            }`}
+                          >
+                            {!plc.readOk
+                              ? zh
+                                ? "读取失败"
+                                : "Read Failed"
+                              : plc.failedCount === 0
+                                ? zh
+                                  ? "推流完成"
+                                  : "Published"
+                                : zh
+                                  ? "部分失败"
+                                  : "Partial"}
+                          </span>
+                          {plc.readLatencyMs !== null && (
+                            <span className="dbot-meta-muted">{plc.readLatencyMs} ms</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {!plc.readOk && plc.readError && (
+                        <div className="dbot-error-box">
+                          <strong>{zh ? "Modbus 读取失败：" : "Modbus Read Failed: "}</strong>
+                          <span>{plc.readError}</span>
+                        </div>
+                      )}
+
+                      {plc.readOk && !plc.mqttConfigured && (
+                        <div className="dbot-warning-box">
+                          {zh
+                            ? "已完成 Modbus 实时读取，但尚未配置 MQTT Broker，因此未向 Broker 发送消息。"
+                            : "Modbus read succeeded, but no MQTT broker is configured so messages were not published."}
+                        </div>
+                      )}
+
+                      <div className="dbot-kpi-grid cols-4">
+                        <div className="dbot-kpi-card">
+                          <span>{zh ? "执行轮次" : "Rounds"}</span>
+                          <strong>{plc.rounds}</strong>
+                          <small>
+                            {plc.totalBlocks} {zh ? "个气缸/轮" : "blocks/round"}
+                          </small>
+                        </div>
+                        <div className="dbot-kpi-card">
+                          <span>{zh ? "测试推流成功" : "Published"}</span>
+                          <strong className={plc.publishedCount > 0 ? "is-ok" : ""}>
+                            {plc.publishedCount}
+                          </strong>
+                        </div>
+                        <div className="dbot-kpi-card">
+                          <span>{zh ? "发送失败" : "Failed"}</span>
+                          <strong className={plc.failedCount > 0 ? "is-danger" : ""}>
+                            {plc.failedCount}
+                          </strong>
+                        </div>
+                        <div className="dbot-kpi-card">
+                          <span>{zh ? "正常模式会被拦截" : "Blocked in Normal Mode"}</span>
+                          <strong className={plc.blockedInNormalCount > 0 ? "is-violet" : ""}>
+                            {plc.blockedInNormalCount} / {plc.totalBlocks}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {plc.blocks.length > 0 && (
+                        <div className="dbot-table-wrap dbot-table-scroll">
+                          <table className="dbot-table">
+                            <thead>
+                              <tr>
+                                <th>DB #</th>
+                                <th>Topic / Part</th>
+                                <th>{zh ? "测试推流" : "Test Publish"}</th>
+                                <th>{zh ? "正常模式判定" : "Normal Mode Gate"}</th>
+                                <th>Payload</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {plc.blocks.map((b) => (
+                                <tr key={`${plc.namespace}-${plc.plcId}-${b.blockIndex}`}>
+                                  <td className="dbot-num">#{b.blockIndex + 1}</td>
+                                  <td>
+                                    {b.partNumber && (
+                                      <strong className="dbot-part-tag">{b.partNumber}</strong>
+                                    )}
+                                    <code className="dbot-topic-code">{b.topic}</code>
+                                  </td>
+                                  <td>
+                                    {b.published ? (
+                                      <span className="dbot-pill is-ok">
+                                        {zh ? "已发送" : "Sent"}
+                                      </span>
+                                    ) : (
+                                      <div>
+                                        <span className="dbot-pill is-error">
+                                          {zh ? "未发送" : "Failed"}
+                                        </span>
+                                        {b.publishError && (
+                                          <div className="dbot-cell-sub">{b.publishError}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="dbot-reason-cell">
+                                    <span
+                                      className={`dbot-pill ${b.normalGatePassed ? "is-ok" : "is-violet"}`}
+                                      style={{ marginRight: 6 }}
+                                    >
+                                      {b.normalGatePassed
+                                        ? zh
+                                          ? "符合标准"
+                                          : "Pass"
+                                        : zh
+                                          ? "会被拦截"
+                                          : "Blocked"}
+                                    </span>
+                                    <span>
+                                      {formatGateReason(
+                                        b.normalGateReason,
+                                        b.normalGateDetail,
+                                        zh,
+                                      )}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {b.payload ? (
+                                      <details className="dbot-inline-payload">
+                                        <summary>{zh ? "查看 JSON" : "JSON"}</summary>
+                                        <pre>{JSON.stringify(b.payload, null, 2)}</pre>
+                                      </details>
+                                    ) : (
+                                      <span className="dbot-muted-cell">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </section>

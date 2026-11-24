@@ -54,52 +54,9 @@ function BotIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-function CpuIcon({ size = 19 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="4" y="4" width="16" height="16" rx="2" />
-      <rect x="9" y="9" width="6" height="6" />
-      <line x1="9" y1="1" x2="9" y2="4" />
-      <line x1="15" y1="1" x2="15" y2="4" />
-      <line x1="9" y1="20" x2="9" y2="23" />
-      <line x1="15" y1="20" x2="15" y2="23" />
-    </svg>
-  );
-}
-
-function CloseIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
-
 export function UnifiedAppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [debugBotView, setDebugBotView] = useState<DebugBotView>("chat");
   const [dbHealthy, setDbHealthy] = useState<boolean | null>(null);
   const [language, setLanguageState] = useState<AppLanguage>(() => {
@@ -151,15 +108,6 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSidebarOpen(false);
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [sidebarOpen]);
-
   const currentConnectorGroup =
     pathname === "/import"
       ? "Import"
@@ -170,119 +118,15 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
           ? "Add"
           : "Status";
 
-  const openModule = (target: "connector" | "debug-bot") => {
-    setSidebarOpen(false);
-    navigate(target === "debug-bot" ? "/debug-bot" : "/dashboard");
-  };
-
   return (
     <AppShellContext.Provider
       value={{ language, setLanguage, debugBotView, setDebugBotView, dbHealthy }}
     >
       <div className="unified-app-shell">
-        {/* Slide-out Workspace Switcher Sidebar Drawer */}
-        <div
-          className={`unified-sidebar-backdrop ${sidebarOpen ? "is-open" : ""}`}
-          aria-hidden={!sidebarOpen}
-          onClick={() => setSidebarOpen(false)}
-        />
-        <aside
-          className={`unified-sidebar ${sidebarOpen ? "is-open" : ""}`}
-          aria-label={zh ? "应用模块切换侧边栏" : "Application switcher sidebar"}
-          aria-hidden={!sidebarOpen}
-        >
-          <div className="unified-sidebar-header">
-            <div className="unified-sidebar-brand">
-              <img src={brandIcon} alt="Connector" className="brand-icon" />
-              <div>
-                <strong className="unified-sidebar-title">Connector</strong>
-                <span className="unified-sidebar-subtitle">
-                  {zh ? "选择工作区模块" : "Workspace Modules"}
-                </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="unified-sidebar-close"
-              aria-label={zh ? "关闭侧边栏" : "Close sidebar"}
-              onClick={() => setSidebarOpen(false)}
-            >
-              <CloseIcon size={18} />
-            </button>
-          </div>
-
-          <nav
-            className="unified-sidebar-nav"
-            aria-label={zh ? "应用模块导航" : "Application modules"}
-          >
-            <div className="unified-sidebar-section-label">
-              {zh ? "应用模块" : "APPLICATIONS"}
-            </div>
-            {(
-              [
-                {
-                  id: "connector" as const,
-                  title: "Connector",
-                  icon: <CpuIcon size={19} />,
-                  selected: !isDebugBot,
-                },
-                {
-                  id: "debug-bot" as const,
-                  title: "Debug Bot",
-                  icon: <BotIcon size={19} />,
-                  selected: isDebugBot,
-                },
-              ] as const
-            ).map((item, idx) => (
-              <button
-                key={item.id}
-                type="button"
-                style={{ transitionDelay: sidebarOpen ? `${idx * 40}ms` : "0ms" }}
-                className={`unified-sidebar-item ${item.selected ? "is-selected" : ""}`}
-                onClick={() => openModule(item.id)}
-              >
-                <span className="unified-sidebar-item-icon">{item.icon}</span>
-                <span className="unified-sidebar-item-text">
-                  <strong>{item.title}</strong>
-                </span>
-                <span className="unified-sidebar-item-check" aria-hidden="true">
-                  ✓
-                </span>
-              </button>
-            ))}
-          </nav>
-
-          <div className="unified-sidebar-footer">
-            <div className={`unified-sidebar-db ${dbHealthy ? "is-healthy" : ""}`}>
-              <DatabaseIcon size={15} />
-              <span>
-                {dbHealthy
-                  ? zh
-                    ? "PostgreSQL 数据库在线"
-                    : "PostgreSQL Online"
-                  : zh
-                    ? "PostgreSQL 待机中"
-                    : "PostgreSQL Standby"}
-              </span>
-            </div>
-          </div>
-        </aside>
-
         {/* Unified Top Application Bar */}
         <header className="unified-topbar">
           <div className="unified-topbar-inner">
             <div className="unified-brand-area">
-              <button
-                className={`project-switcher-trigger ${sidebarOpen ? "is-open" : ""}`}
-                type="button"
-                aria-label={zh ? "打开应用切换侧边栏" : "Open application sidebar"}
-                aria-expanded={sidebarOpen}
-                onClick={() => setSidebarOpen((open) => !open)}
-              >
-                <span />
-                <span />
-                <span />
-              </button>
               <button
                 type="button"
                 className="unified-brand-button"

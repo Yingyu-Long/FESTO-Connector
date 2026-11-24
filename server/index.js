@@ -13,6 +13,8 @@ import {
 } from "./plc/modbusClient.js";
 import {
   getModbusPollerStatus,
+  listModbusDatablockPollers,
+  runModbusTestModePublish,
   startModbusPoller,
   stopAllModbusPollers,
   stopModbusPoller,
@@ -454,6 +456,33 @@ app.post("/api/debug-bot/config/test", async (request, response) => {
 
 app.get("/api/debug-bot/tools", (_request, response) => {
   response.json({ tools: listDebugBotTools() });
+});
+
+app.get("/api/debug-bot/modbus-pollers", (_request, response) => {
+  response.json({ pollers: listModbusDatablockPollers() });
+});
+
+app.post("/api/debug-bot/test-mode", async (request, response) => {
+  try {
+    const body = request.body ?? {};
+    const plcId =
+      typeof body.plcId === "string" && body.plcId.trim() ? body.plcId.trim() : null;
+    const durationSeconds = Number(body.durationSeconds ?? 0);
+    const result = await runModbusTestModePublish({
+      plcId,
+      durationSeconds,
+    });
+    response.json(result);
+  } catch (error) {
+    response.status(error?.status || 500).json({
+      ok: false,
+      found: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to run Modbus Test Mode publish",
+    });
+  }
 });
 
 app.post("/api/debug-bot/tool", async (request, response) => {

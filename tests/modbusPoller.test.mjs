@@ -42,8 +42,13 @@ test("poller keeps reading and updating status while only publishing changed FBs
       testModbusConnection: async () => { throw new Error("Unexpected extra PLC connection"); },
     },
   });
-  const { startModbusPoller, stopModbusPoller, getModbusPollerStatus, testModbusPollerConnection } =
-    await import("../server/plc/modbusPoller.js");
+  const {
+    startModbusPoller,
+    stopModbusPoller,
+    getModbusPollerStatus,
+    testModbusPollerConnection,
+    runModbusTestModePublish,
+  } = await import("../server/plc/modbusPoller.js");
   const config = {
     id: "test-plc", host: "plc", port: 502, unitId: 1, timeout: 1000,
     polling: 10, readMode: "Read by Datablocks",
@@ -70,6 +75,9 @@ test("poller keeps reading and updating status while only publishing changed FBs
   assert.equal(getModbusPollerStatus(config.id).pollingStatus, "HEALTHY");
   assert.equal(typeof getModbusPollerStatus(config.id).dataBlocks[0]?.lastDataUpdatedAt, "number");
   assert.equal(getModbusPollerStatus(config.id).dataBlocks[0]?.updateCount, 1);
+  assert.equal(typeof getModbusPollerStatus(config.id).dataBlocks[0]?.lastRejectedChangeAt, "number");
+  assert.deepEqual(getModbusPollerStatus(config.id).dataBlocks[0]?.changedFieldsSinceValid, ["cycle_counter"]);
+  assert.equal(getModbusPollerStatus(config.id).dataBlocks[0]?.publishGate?.reason, "CYCLE_NOT_PROGRESSED");
   assert.equal(getModbusPollerStatus(config.id).dataBlocks[1]?.lastDataUpdatedAt, null);
   assert.equal(getModbusPollerStatus(config.id).dataBlocks[1]?.updateCount, 0);
 
@@ -103,4 +111,23 @@ test("poller keeps reading and updating status while only publishing changed FBs
   const readsAfterDisabling = reads;
   await waitFor(() => reads >= readsAfterDisabling + 2);
   assert.equal(messages.length, afterDisabling, "Normal polling resumes suppressing unchanged timestamps");
+
+  // On-demand Quick Diagnostics Test Mode publishes without toggling config switch or altering normal dedup baseline
+  blocks[0].values.timestamp_DI_IPos_ON = "1000"; // Make block 0 torn/inconsistent
+  const beforeOnDemand = messages.length;
+  const testModeRes = await runModbusTestModePublish({ plcId: config.id, durationSeconds: 0 });
+  assert.equal(testModeRes.ok, true);
+  assert.equal(testModeRes.found, true);
+  assert.equal(testModeRes.totalPublished, 2);
+  assert.equal(messages.length, beforeOnDemand + 2);
+  assert.equal(testModeRes.results[0].blocks[0].normalGatePassed, false);
+  assert.equal(testModeRes.results[0].blocks[0].normalGateReason, "INCONSISTENT_CYCLE");
+  assert.equal(testModeRes.results[0].blocks[1].normalGatePassed, false);
+  assert.equal(testModeRes.results[0].blocks[1].normalGateReason, "CYCLE_NOT_PROGRESSED");
+
+  // Normal polling continues suppressing unchanged/torn blocks right after on-demand Test Mode finishes
+  const afterOnDemand = messages.length;
+  const readsAfterOnDemand = reads;
+  await waitFor(() => reads >= readsAfterOnDemand + 2);
+  assert.equal(messages.length, afterOnDemand, "Normal mode remains active after on-demand Test Mode finishes");
 });

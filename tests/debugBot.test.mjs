@@ -15,6 +15,7 @@ import {
   testPlcAndMqttConnectivity,
   validateConnectorConfiguration,
 } from "../server/debugBot/connectorDiagnostics.js";
+import { evaluateDatablockPublishGate } from "../server/plc/modbusDatablockPublisher.js";
 import {
   clearDiagnosticEvents,
   recordDiagnosticEvent,
@@ -476,4 +477,137 @@ test("Debug Bot diagnoses MQTT broker backlog via $SYS metrics, publisher backpr
   assert.equal(healthyResult.status, "HEALTHY");
   assert.equal(healthyResult.sysMetrics.estimatedQueuedMessages, 0);
   assert.equal(healthyResult.loopbackProbe.ok, true);
+});
+
+test("Debug Bot distinguishes non-fresh cylinder causes: READ_FAILED, DATA_UNCHANGED, and PARTIAL_CHANGE_REJECTED", () => {
+  const now = 1_730_000_900_000;
+
+  // Verify publish gate evaluator directly across rejection reasons
+  const baseValues = makeCylinderValues(10000);
+  const baseGate = evaluateDatablockPublishGate(baseValues, null);
+  assert.equal(baseGate.eligible, true);
+  assert.equal(baseGate.reason, "VALID_CYCLE");
+
+  const zeroGate = evaluateDatablockPublishGate(
+    makeCylinderValues(10000, 1, { timestamp_DI_IPos_ON: "0" }),
+    null,
+  );
+  assert.equal(zeroGate.eligible, false);
+  assert.equal(zeroGate.reason, "ZERO_TIMESTAMPS");
+  assert.deepEqual(zeroGate.zeroFields, ["DI_IPos_ON"]);
+
+  const tornGate = evaluateDatablockPublishGate(
+    makeCylinderValues(10000, 1, { timestamp_DI_IPos_ON: "10070" }),
+    null,
+  );
+  assert.equal(tornGate.eligible, false);
+  assert.equal(tornGate.reason, "INCONSISTENT_CYCLE");
+
+  const unchangedCycleGate = evaluateDatablockPublishGate(
+    makeCylinderValues(10000, 1, { cycle_counter: 99 }),
+    baseGate.cycle,
+  );
+  assert.equal(unchangedCycleGate.eligible, false);
+  assert.equal(unchangedCycleGate.reason, "CYCLE_NOT_PROGRESSED");
+
+  const partialGate = evaluateDatablockPublishGate(
+    makeCylinderValues(10000, 1, { timestamp_DI_IPos_ON: "10120" }),
+    baseGate.cycle,
+  );
+  assert.equal(partialGate.eligible, false);
+  assert.equal(partialGate.reason, "PARTIAL_TIMESTAMP_PROGRESSION");
+  assert.deepEqual(partialGate.changedTimestampFields, ["DI_IPos_ON"]);
+
+  // Poller 1: PLC read succeeds — 1 FRESH, 1 DATA_UNCHANGED, 1 PARTIAL_CHANGE_REJECTED
+  const healthyPlcBlocks = [
+    {
+      index: 0,
+      startAddress: 0,
+      topic: "cyl/fresh",
+      values: makeCylinderValues(20000),
+      firstSeenAt: now - 300_000,
+      lastRawChangedAt: now - 5_000,
+      lastValidCycleAt: now - 5_000,
+      validCycleCount: 4,
+      rawChangeCount: 4,
+      publishCount: 5,
+      lastRejectedChangeAt: null,
+      changedFieldsSinceValid: [],
+      publishGate: { enforced: true, eligible: true, consistent: true, progressed: true, reason: "VALID_CYCLE", detail: "Complete" },
+    },
+    {
+      index: 1,
+      startAddress: 58,
+      topic: "cyl/unchanged",
+      values: makeCylinderValues(10000),
+      firstSeenAt: now - 300_000,
+      lastRawChangedAt: now - 120_000,
+      lastValidCycleAt: now - 120_000,
+      validCycleCount: 2,
+      rawChangeCount: 2,
+      publishCount: 3,
+      lastRejectedChangeAt: null,
+      changedFieldsSinceValid: [],
+      publishGate: { enforced: true, eligible: false, consistent: true, progressed: false, reason: "CYCLE_NOT_PROGRESSED", detail: "All 6 timestamps unchanged" },
+    },
+    {
+      index: 2,
+      startAddress: 116,
+      topic: "cyl/rejected",
+      values: makeCylinderValues(10000, 1, { cycle_counter: 55 }),
+      firstSeenAt: now - 300_000,
+      lastRawChangedAt: now - 2_000,
+      lastValidCycleAt: now - 150_000,
+      validCycleCount: 1,
+      rawChangeCount: 3,
+      publishCount: 2,
+      lastRejectedChangeAt: now - 2_000,
+      changedFieldsSinceValid: ["cycle_counter"],
+      publishGate: { enforced: true, eligible: false, consistent: true, progressed: false, reason: "CYCLE_NOT_PROGRESSED", detail: "All 6 cycle timestamps match the last published cycle" },
+    },
+  ];
+
+  // Poller 2: PLC read failed from boot (0 blocks cached, 2 configured topics)
+  const result = inspectModbusDatablocks({
+    staleThresholdSeconds: 60,
+    nowMs: now,
+    getActivePollers: () => [
+      {
+        id: "PLC_OK",
+        namespace: "modbus",
+        config: { host: "10.0.0.10", port: 502, unitId: 1, readMode: "Read by Datablocks", polling: 500, blockTopics: ["cyl/fresh", "cyl/unchanged", "cyl/rejected"] },
+      },
+      {
+        id: "PLC_DOWN",
+        namespace: "modbus",
+        config: { host: "10.0.0.11", port: 502, unitId: 1, readMode: "Read by Datablocks", polling: 500, startAddress: 0, blockTopics: ["cyl/down1", "cyl/down2"] },
+      },
+    ],
+    getStatus: (id) =>
+      id === "PLC_OK"
+        ? { pollingStatus: "HEALTHY", lastReadError: null, updatedAt: now, dataBlocks: healthyPlcBlocks }
+        : { pollingStatus: "UNHEALTHY", lastReadError: "Timed out", error: "Timed out", consecutiveReadErrors: 3, updatedAt: now, dataBlocks: [] },
+  });
+
+  const okPoller = result.pollers.find((p) => p.plcId === "PLC_OK");
+  assert.equal(okPoller.summary.freshCount, 1);
+  assert.equal(okPoller.summary.unchangedCount, 1);
+  assert.equal(okPoller.summary.rejectedChangeCount, 1);
+  assert.equal(okPoller.summary.readFailedCount, 0);
+
+  const rejectedCyl = okPoller.cylinders.find((c) => c.topic === "cyl/rejected");
+  assert.equal(rejectedCyl.freshnessStatus, "REJECTED_CHANGE");
+  assert.equal(rejectedCyl.nonFreshReason, "PARTIAL_CHANGE_REJECTED");
+  assert.deepEqual(rejectedCyl.changedFields, ["cycle_counter"]);
+
+  const unchangedCyl = okPoller.cylinders.find((c) => c.topic === "cyl/unchanged");
+  assert.equal(unchangedCyl.freshnessStatus, "STALE");
+  assert.equal(unchangedCyl.nonFreshReason, "DATA_UNCHANGED");
+
+  const downPoller = result.pollers.find((p) => p.plcId === "PLC_DOWN");
+  assert.equal(downPoller.summary.totalCylinders, 2);
+  assert.equal(downPoller.summary.readFailedCount, 2);
+  assert.equal(downPoller.cylinders[0].freshnessStatus, "READ_FAILED");
+  assert.equal(downPoller.cylinders[0].nonFreshReason, "READ_FAILED");
+  assert.match(downPoller.cylinders[0].reasonDetail, /Timed out/);
 });

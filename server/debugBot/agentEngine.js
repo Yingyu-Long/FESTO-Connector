@@ -70,10 +70,10 @@ export const DEBUG_BOT_TOOLS = [
   {
     name: "inspect_modbus_datablocks",
     category: "modbus",
-    summaryEn: "Check how long each active Modbus cylinder datablock has gone without updating data.",
-    summaryZh: "读取所有运行中的 Modbus 气缸数据块，分析每个气缸多久没有更新数据。",
+    summaryEn: "Monitor cylinder data freshness and distinguish PLC read failure, static data, or partial updates rejected by publish rules.",
+    summaryZh: "监测 Modbus 气缸数据新鲜度，并分辨读不上数据、数据未更新或部分变化但不符新发送标准。",
     description:
-      "Inspect all active Modbus TCP cylinder datablocks (reads every configured cylinder, regardless of count) and analyze how long each cylinder has gone without updating data (staleDurationMs/Seconds, lastDataUpdatedAt, updateCount, neverUpdatedCount).",
+      "Inspect all active Modbus TCP cylinder datablocks (any count) and classify each non-fresh cylinder into exact root causes: READ_FAILED (cannot read from PLC / Modbus error / no data), DATA_UNCHANGED (PLC read OK but register values unchanged), or PARTIAL_CHANGE_REJECTED (some register values changed, such as cycle_counter or partial/torn/zero timestamps, but failed the 6-timestamp publish standard).",
     parameters: {
       type: "object",
       properties: {
@@ -261,7 +261,7 @@ function buildSystemPrompt(language = "zh", customPrompt = "") {
 You have live, read-only diagnostic skills covering the full Connector pipeline:
 1. subscribe_connector_mqtt: Subscribe to the configured MQTT broker & topics for live payload sampling, publish throughput, and 6-timestamp cylinder cycle verification (t1..t4 durations).
 2. diagnose_mqtt_broker_backlog: Diagnose whether MQTT messages are piling up / congested at the Broker by inspecting $SYS/# queue/drop/disconnected-session/rate metrics, Connector publisher PUBACK backpressure & socket buffer, and a QoS 1 loopback latency probe.
-3. inspect_modbus_datablocks: Read all live in-memory datablocks across active Modbus pollers (any number of cylinders, no fixed cap) and measure how long each cylinder has gone without updating data (stale duration, last data update time, never-updated status, update count).
+3. inspect_modbus_datablocks: Read all live in-memory datablocks across active Modbus pollers (any number of cylinders) and distinguish non-fresh cylinders across 3 root causes: READ_FAILED (cannot read from PLC), DATA_UNCHANGED (Modbus read OK, registers static), and PARTIAL_CHANGE_REJECTED (some fields changed, e.g. cycle_counter or partial/torn/zero timestamps, but failed the 6-timestamp publish standard).
 4. validate_connector_configuration: Audit the saved configuration for register overflow (>65535), FC03 batch count vs polling interval bottlenecks, overlapping register ranges, and duplicate/invalid MQTT topics.
 5. test_plc_and_mqtt_connectivity: Run live protocol handshakes (Modbus read, OPC UA connect, MQTT connect) with TCP vs protocol latency breakdown.
 6. get_system_runtime_health: Check PostgreSQL health, Node.js uptime/memory, active pollers, and recent backend diagnostic error events.

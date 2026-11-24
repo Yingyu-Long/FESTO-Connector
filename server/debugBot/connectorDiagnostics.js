@@ -14,6 +14,7 @@ import {
 import { getCustomisedModbusPollerStatus } from "../plc/modbusCustomisedPoller.js";
 import {
   CYLINDER_CYCLE_TIMESTAMP_FIELDS,
+  evaluateDatablockPublishGate,
   extractCylinderCycleTimestamps,
   isConsistentCylinderCycle,
 } from "../plc/modbusDatablockPublisher.js";
@@ -603,36 +604,151 @@ export function inspectModbusDatablocks({
 
   const pollers = targets.map((poller) => {
     const status = getStatus(poller.id, poller.namespace);
-    const dataBlocks = Array.isArray(status?.dataBlocks) ? status.dataBlocks : [];
+    const rawDataBlocks = Array.isArray(status?.dataBlocks) ? status.dataBlocks : [];
+    const isCustom = (poller.config.layoutMode ?? "standard") === "custom";
+    const lastReadError =
+      typeof status?.lastReadError === "string" && status.lastReadError
+        ? status.lastReadError
+        : status?.pollingStatus === "UNHEALTHY" && !status?.lastPublishError && status?.error
+          ? String(status.error)
+          : null;
+    const readFailed =
+      Boolean(lastReadError) ||
+      (status?.pollingStatus === "UNHEALTHY" && !status?.lastPublishError);
+    const configuredTopics =
+      poller.config.readMode === "Read by Datablocks" && Array.isArray(poller.config.blockTopics)
+        ? poller.config.blockTopics
+        : [];
 
-    const cylinders = dataBlocks.map((block, idx) => {
+    const effectiveBlocks =
+      rawDataBlocks.length > 0
+        ? rawDataBlocks
+        : configuredTopics.map((topic, idx) => ({
+            index: idx,
+            startAddress:
+              Number(poller.config.startAddress ?? 0) +
+              idx * (isCustom ? 0 : MODBUS_DATABLOCK_REGISTER_COUNT),
+            topic,
+            values: null,
+            synthesizedNoData: true,
+          }));
+
+    const cylinders = effectiveBlocks.map((block, idx) => {
+      const hasValues = Boolean(block.values && typeof block.values === "object");
       const firstSeenAt =
         typeof block.firstSeenAt === "number"
           ? block.firstSeenAt
-          : typeof status?.updatedAt === "number"
+          : hasValues && typeof status?.updatedAt === "number"
             ? status.updatedAt
             : null;
-      const lastDataUpdatedAt =
-        typeof block.lastDataUpdatedAt === "number" ? block.lastDataUpdatedAt : null;
-      const hasUpdatedSinceStart = lastDataUpdatedAt !== null;
-      const referenceTime = lastDataUpdatedAt ?? firstSeenAt;
+      const lastRawChangedAt =
+        typeof block.lastRawChangedAt === "number"
+          ? block.lastRawChangedAt
+          : typeof block.lastDataUpdatedAt === "number"
+            ? block.lastDataUpdatedAt
+            : null;
+      const hasLiveGateTelemetry =
+        typeof block.validCycleCount === "number" ||
+        block.lastValidCycleAt !== undefined ||
+        block.lastRejectedChangeAt !== undefined;
+      const lastValidCycleAt = hasLiveGateTelemetry
+        ? typeof block.lastValidCycleAt === "number"
+          ? block.lastValidCycleAt
+          : null
+        : lastRawChangedAt;
+      const lastRejectedChangeAt =
+        typeof block.lastRejectedChangeAt === "number" ? block.lastRejectedChangeAt : null;
+      const rawChangeCount =
+        typeof block.rawChangeCount === "number"
+          ? block.rawChangeCount
+          : typeof block.updateCount === "number"
+            ? block.updateCount
+            : lastRawChangedAt !== null
+              ? 1
+              : 0;
+      const validCycleCount = hasLiveGateTelemetry
+        ? typeof block.validCycleCount === "number"
+          ? block.validCycleCount
+          : 0
+        : rawChangeCount;
+      const publishCount =
+        typeof block.publishCount === "number" ? block.publishCount : validCycleCount;
+      const changedFields = Array.isArray(block.changedFieldsSinceValid)
+        ? block.changedFieldsSinceValid
+        : [];
+
+      const publishGate =
+        block.publishGate && typeof block.publishGate === "object"
+          ? block.publishGate
+          : hasValues
+            ? (() => {
+                const evaluated = evaluateDatablockPublishGate(block.values, null, { isCustom });
+                return {
+                  enforced: evaluated.enforced,
+                  eligible: evaluated.eligible,
+                  consistent: evaluated.consistent,
+                  progressed: evaluated.progressed,
+                  reason: evaluated.reason,
+                  detail: evaluated.detail,
+                  zeroFields: evaluated.zeroFields,
+                  changedTimestampFields: evaluated.changedTimestampFields,
+                  unchangedTimestampFields: evaluated.unchangedTimestampFields,
+                };
+              })()
+            : null;
+
+      const hasUpdatedSinceStart = lastValidCycleAt !== null;
+      const referenceTime = lastValidCycleAt ?? firstSeenAt;
       const staleDurationMs =
         referenceTime !== null ? Math.max(0, Math.round(now - referenceTime)) : null;
       const staleDurationSeconds =
         staleDurationMs !== null ? Number((staleDurationMs / 1000).toFixed(1)) : null;
-      const updateCount =
-        typeof block.updateCount === "number"
-          ? block.updateCount
-          : hasUpdatedSinceStart
-            ? 1
-            : 0;
-      const isStale = staleDurationMs !== null && staleDurationMs >= thresholdMs;
+      const timeExceeded = staleDurationMs !== null && staleDurationMs >= thresholdMs;
 
-      let freshnessStatus = "NO_DATA";
-      if (staleDurationMs !== null) {
-        if (isStale) freshnessStatus = "STALE";
-        else if (!hasUpdatedSinceStart) freshnessStatus = "NEVER_UPDATED";
-        else freshnessStatus = "FRESH";
+      const hasRejectedRawChange = hasLiveGateTelemetry
+        ? Boolean(
+            lastRejectedChangeAt !== null &&
+              (lastValidCycleAt === null || lastRejectedChangeAt >= lastValidCycleAt),
+          )
+        : Boolean(
+            lastRawChangedAt !== null &&
+              publishGate?.enforced &&
+              publishGate.consistent === false,
+          );
+
+      let freshnessStatus;
+      let nonFreshReason;
+      let reasonDetail;
+      let isStale = timeExceeded;
+
+      if (readFailed || !hasValues) {
+        freshnessStatus = readFailed ? "READ_FAILED" : "NO_DATA";
+        nonFreshReason = "READ_FAILED";
+        isStale = true;
+        reasonDetail =
+          lastReadError ||
+          status?.error ||
+          "No datablock data has been read from the Modbus PLC yet.";
+      } else if (hasRejectedRawChange) {
+        freshnessStatus = "REJECTED_CHANGE";
+        nonFreshReason = "PARTIAL_CHANGE_REJECTED";
+        isStale = true;
+        const fieldsPrefix =
+          changedFields.length > 0
+            ? `Changed fields: [${changedFields.map((f) => f.replace(/^timestamp_/, "")).join(", ")}] — `
+            : "";
+        reasonDetail = `${fieldsPrefix}${publishGate?.detail || "Data changed but does not satisfy the 6-timestamp publish standard."}`;
+      } else if (lastValidCycleAt !== null && staleDurationMs !== null && !timeExceeded) {
+        freshnessStatus = "FRESH";
+        nonFreshReason = null;
+        reasonDetail = null;
+      } else {
+        freshnessStatus = timeExceeded ? "STALE" : "NEVER_UPDATED";
+        nonFreshReason = "DATA_UNCHANGED";
+        reasonDetail =
+          publishGate?.enforced && publishGate.consistent === false
+            ? `PLC read OK, register values unchanged (current static snapshot also fails publish gate: ${publishGate.detail}).`
+            : "PLC read OK, register values have not changed.";
       }
 
       return {
@@ -643,19 +759,34 @@ export function inspectModbusDatablocks({
         cycleCounter: block.values?.cycle_counter ?? block.values?.udiCycleCounter ?? null,
         firstSeenAt: firstSeenAt !== null ? new Date(firstSeenAt).toISOString() : null,
         lastDataUpdatedAt:
-          lastDataUpdatedAt !== null ? new Date(lastDataUpdatedAt).toISOString() : null,
+          lastValidCycleAt !== null ? new Date(lastValidCycleAt).toISOString() : null,
+        lastValidCycleAt:
+          lastValidCycleAt !== null ? new Date(lastValidCycleAt).toISOString() : null,
+        lastRawChangedAt:
+          lastRawChangedAt !== null ? new Date(lastRawChangedAt).toISOString() : null,
+        lastRejectedChangeAt:
+          lastRejectedChangeAt !== null ? new Date(lastRejectedChangeAt).toISOString() : null,
         hasUpdatedSinceStart,
-        updateCount,
+        updateCount: validCycleCount,
+        validCycleCount,
+        rawChangeCount,
+        publishCount,
         staleDurationMs,
         staleDurationSeconds,
         isStale,
         freshnessStatus,
+        nonFreshReason,
+        reasonDetail,
+        changedFields,
+        publishGate,
       };
     });
 
-    // Sort longest un-updated first; tie-break by block index.
+    // Sort longest un-updated first (READ_FAILED with null duration prioritized at top); tie-break by block index.
     cylinders.sort((a, b) => {
-      const diff = (b.staleDurationMs ?? -1) - (a.staleDurationMs ?? -1);
+      const aVal = a.staleDurationMs ?? (a.nonFreshReason === "READ_FAILED" ? Number.MAX_SAFE_INTEGER : -1);
+      const bVal = b.staleDurationMs ?? (b.nonFreshReason === "READ_FAILED" ? Number.MAX_SAFE_INTEGER : -1);
+      const diff = bVal - aVal;
       return diff !== 0 ? diff : a.blockIndex - b.blockIndex;
     });
 
@@ -675,6 +806,10 @@ export function inspectModbusDatablocks({
       pollingMs: poller.config.polling,
       pollingStatus: status?.pollingStatus ?? "UNKNOWN",
       lastError: status?.error ?? null,
+      lastReadError,
+      lastPublishError: status?.lastPublishError ?? null,
+      consecutiveReadErrors: status?.consecutiveReadErrors ?? 0,
+      lastReadAt: status?.lastReadAt ? new Date(status.lastReadAt).toISOString() : null,
       lastPollAt: status?.updatedAt ? new Date(status.updatedAt).toISOString() : null,
       checkedAt: new Date(now).toISOString(),
       summary: {
@@ -683,6 +818,11 @@ export function inspectModbusDatablocks({
         freshCount: cylinders.filter((c) => c.freshnessStatus === "FRESH").length,
         staleCount: cylinders.filter((c) => c.isStale).length,
         neverUpdatedCount: cylinders.filter((c) => !c.hasUpdatedSinceStart).length,
+        readFailedCount: cylinders.filter((c) => c.nonFreshReason === "READ_FAILED").length,
+        unchangedCount: cylinders.filter((c) => c.nonFreshReason === "DATA_UNCHANGED").length,
+        rejectedChangeCount: cylinders.filter(
+          (c) => c.nonFreshReason === "PARTIAL_CHANGE_REJECTED",
+        ).length,
         maxStaleDurationMs,
         maxStaleDurationSeconds:
           maxStaleDurationMs !== null ? Number((maxStaleDurationMs / 1000).toFixed(1)) : null,
