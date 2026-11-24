@@ -223,18 +223,12 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
                 {
                   id: "connector" as const,
                   title: "Connector",
-                  subtitle: zh
-                    ? "Modbus / S7 / OPC UA 采集与 MQTT 发布"
-                    : "Modbus / S7 / OPC UA & MQTT Publisher",
                   icon: <CpuIcon size={19} />,
                   selected: !isDebugBot,
                 },
                 {
                   id: "debug-bot" as const,
                   title: "Debug Bot",
-                  subtitle: zh
-                    ? "AI 诊断对话、66 气缸分析与 MQTT 实时巡检"
-                    : "AI Diagnostics, 66-Cylinder & Live MQTT Checks",
                   icon: <BotIcon size={19} />,
                   selected: isDebugBot,
                 },
@@ -250,7 +244,6 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
                 <span className="unified-sidebar-item-icon">{item.icon}</span>
                 <span className="unified-sidebar-item-text">
                   <strong>{item.title}</strong>
-                  <small>{item.subtitle}</small>
                 </span>
                 <span className="unified-sidebar-item-check" aria-hidden="true">
                   ✓
