@@ -3,6 +3,9 @@ import type { FormEvent, ReactNode } from "react";
 import { useAppShell } from "../appShellContext";
 import "./debugBot.css";
 
+type ThinkLevel = "off" | "low" | "medium" | "high";
+type ActiveThinkLevel = "low" | "medium" | "high";
+
 interface DebugBotConfigClient {
   provider: string;
   apiFormat: "openai" | "anthropic";
@@ -10,6 +13,7 @@ interface DebugBotConfigClient {
   model: string;
   temperature: number;
   maxToolSteps: number;
+  thinkLevel?: ThinkLevel;
   hasApiKey: boolean;
   apiKeyMasked: string;
   requiresApiKey: boolean;
@@ -38,6 +42,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
   toolCalls?: ToolCallTrace[];
   model?: string;
   error?: boolean;
@@ -683,8 +688,26 @@ function inferProvider(baseUrl: string, apiFormat: "openai" | "anthropic"): stri
   if (lower.includes("dashscope")) return "qwen";
   if (lower.includes("openrouter")) return "openrouter";
   if (lower.includes("11434")) return "ollama";
-  if (lower.includes("127.0.0.1") || lower.includes("localhost")) return "custom";
+  if (
+    lower.includes("127.0.0.1") ||
+    lower.includes("localhost") ||
+    lower.includes("host.docker.internal")
+  ) {
+    return "custom";
+  }
   return "openai";
+}
+
+function readStoredThinkLevel(): ThinkLevel | null {
+  try {
+    const saved = localStorage.getItem("debug-bot-think-level");
+    if (saved === "off" || saved === "low" || saved === "medium" || saved === "high") {
+      return saved;
+    }
+  } catch {
+    // Ignore storage access errors.
+  }
+  return null;
 }
 
 export default function DebugBot() {
@@ -702,6 +725,13 @@ export default function DebugBot() {
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState("0.2");
   const [maxToolSteps, setMaxToolSteps] = useState("8");
+  const [thinkLevel, setThinkLevel] = useState<ThinkLevel>(
+    () => readStoredThinkLevel() ?? "medium",
+  );
+  const [lastActiveThinkLevel, setLastActiveThinkLevel] = useState<ActiveThinkLevel>(() => {
+    const stored = readStoredThinkLevel();
+    return stored && stored !== "off" ? stored : "medium";
+  });
   const [savingSettings, setSavingSettings] = useState(false);
   const [testingSettings, setTestingSettings] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<{
@@ -714,6 +744,7 @@ export default function DebugBot() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Quick Diagnostics workbench state (works with or without LLM API key)
   const [activeDiagTab, setActiveDiagTab] = useState<DiagTab>("freshness");
@@ -779,6 +810,15 @@ export default function DebugBot() {
       setModel(hasExplicitConfig ? cfgData.config.model : "");
       setTemperature(String(cfgData.config.temperature ?? 0.2));
       setMaxToolSteps(String(cfgData.config.maxToolSteps ?? 8));
+      const storedThink = readStoredThinkLevel();
+      const resolvedThink: ThinkLevel =
+        cfgData.config.source === "database" && cfgData.config.thinkLevel
+          ? cfgData.config.thinkLevel
+          : (storedThink ?? cfgData.config.thinkLevel ?? "medium");
+      setThinkLevel(resolvedThink);
+      if (resolvedThink !== "off") {
+        setLastActiveThinkLevel(resolvedThink);
+      }
       setTools(toolsData.tools ?? []);
     } catch {
       setLoadError(
@@ -814,6 +854,36 @@ export default function DebugBot() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
+  useEffect(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 52), 160)}px`;
+  }, [input, activeView]);
+
+  const updateThinkLevel = (next: ThinkLevel) => {
+    setThinkLevel(next);
+    if (next !== "off") {
+      setLastActiveThinkLevel(next);
+    }
+    try {
+      localStorage.setItem("debug-bot-think-level", next);
+    } catch {
+      // Ignore storage access errors.
+    }
+    if (config?.source === "database") {
+      void fetch("/api/debug-bot/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thinkLevel: next }),
+      }).catch(() => undefined);
+    }
+  };
+
+  const toggleThinkSwitch = () => {
+    updateThinkLevel(thinkLevel === "off" ? lastActiveThinkLevel : "off");
+  };
+
   async function handleSaveSettings(event: FormEvent) {
     event.preventDefault();
     setSavingSettings(true);
@@ -830,6 +900,7 @@ export default function DebugBot() {
           model,
           temperature: Number(temperature),
           maxToolSteps: Number(maxToolSteps),
+          thinkLevel,
         }),
       });
       const data = (await res.json()) as {
@@ -944,11 +1015,13 @@ export default function DebugBot() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           language,
+          thinkLevel,
           messages: nextHistory.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
       const data = (await res.json()) as {
         reply?: string;
+        reasoning?: string;
         toolCalls?: ToolCallTrace[];
         model?: string;
         error?: string;
@@ -962,6 +1035,7 @@ export default function DebugBot() {
           id: `assistant-${Date.now()}`,
           role: "assistant",
           content: data.reply || (zh ? "（未返回文本内容）" : "(Empty response)"),
+          reasoning: data.reasoning,
           toolCalls: data.toolCalls ?? [],
           model: data.model,
           createdAt: new Date().toISOString(),
@@ -1363,6 +1437,12 @@ export default function DebugBot() {
                           {msg.model && <span className="dbot-msg-model">{msg.model}</span>}
                         </div>
                       )}
+                      {msg.reasoning && (
+                        <details className="dbot-thinking-block">
+                          <summary>{zh ? "思考过程" : "Thinking"}</summary>
+                          <div className="dbot-thinking-content">{msg.reasoning}</div>
+                        </details>
+                      )}
                       {msg.toolCalls && msg.toolCalls.length > 0 && (
                         <div className="dbot-trace-list">
                           {msg.toolCalls.map((trace, idx) => (
@@ -1401,7 +1481,8 @@ export default function DebugBot() {
               }}
             >
               <textarea
-                rows={1}
+                ref={composerInputRef}
+                rows={2}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1413,15 +1494,70 @@ export default function DebugBot() {
                 placeholder={zh ? "输入排查问题…" : "Ask Debug Bot…"}
                 disabled={sending}
               />
-              <button
-                type="submit"
-                className="dbot-send-btn"
-                disabled={sending || !input.trim()}
-                aria-label={zh ? "发送" : "Send"}
-              >
-                <Icon name={sending ? "spinner" : "send"} size={15} />
-                <span>{zh ? "发送" : "Send"}</span>
-              </button>
+              <div className="dbot-composer-footer">
+                <div className="dbot-think-controls">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={thinkLevel !== "off"}
+                    aria-label={zh ? "深度思考开关" : "Thinking mode switch"}
+                    className={`dbot-think-switch ${thinkLevel !== "off" ? "is-on" : ""}`}
+                    onClick={toggleThinkSwitch}
+                    disabled={sending}
+                  >
+                    <span className="dbot-switch-track" aria-hidden="true">
+                      <span className="dbot-switch-thumb" />
+                    </span>
+                    <span className="dbot-think-switch-label">
+                      {thinkLevel === "off"
+                        ? zh
+                          ? "No-Think"
+                          : "No-Think"
+                        : zh
+                          ? "Think"
+                          : "Think"}
+                    </span>
+                  </button>
+
+                  {thinkLevel !== "off" && (
+                    <div
+                      className="dbot-think-levels"
+                      role="radiogroup"
+                      aria-label={zh ? "思考强度" : "Think level"}
+                    >
+                      {(
+                        [
+                          ["low", zh ? "低" : "Low"],
+                          ["medium", zh ? "中" : "Med"],
+                          ["high", zh ? "高" : "High"],
+                        ] as const
+                      ).map(([level, label]) => (
+                        <button
+                          key={level}
+                          type="button"
+                          role="radio"
+                          aria-checked={thinkLevel === level}
+                          className={`dbot-think-level-btn ${thinkLevel === level ? "is-active" : ""}`}
+                          onClick={() => updateThinkLevel(level)}
+                          disabled={sending}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  className="dbot-send-btn"
+                  disabled={sending || !input.trim()}
+                  aria-label={zh ? "发送" : "Send"}
+                >
+                  <Icon name={sending ? "spinner" : "send"} size={14} />
+                  <span>{zh ? "发送" : "Send"}</span>
+                </button>
+              </div>
             </form>
           </div>
         </div>
@@ -2661,11 +2797,25 @@ export default function DebugBot() {
               <summary>
                 <span>{zh ? "高级参数" : "Advanced"}</span>
                 <span className="dbot-advanced-meta">
-                  T={temperature} · {maxToolSteps} {zh ? "步" : "steps"}
+                  {thinkLevel === "off" ? "No-Think" : `Think: ${thinkLevel}`} · T={temperature} ·{" "}
+                  {maxToolSteps} {zh ? "步" : "steps"}
                 </span>
               </summary>
               <div className="dbot-advanced-body">
-                <div className="dbot-form-grid dbot-form-grid-tight">
+                <div className="dbot-form-grid-3 dbot-form-grid-tight">
+                  <label className="dbot-field">
+                    <span>{zh ? "思考模式" : "Think Level"}</span>
+                    <select
+                      value={thinkLevel}
+                      onChange={(e) => updateThinkLevel(e.target.value as ThinkLevel)}
+                    >
+                      <option value="off">{zh ? "关闭 (No-Think)" : "Off (No-Think)"}</option>
+                      <option value="low">{zh ? "低 (Low)" : "Low"}</option>
+                      <option value="medium">{zh ? "中 (Medium)" : "Medium"}</option>
+                      <option value="high">{zh ? "高 (High)" : "High"}</option>
+                    </select>
+                  </label>
+
                   <label className="dbot-field">
                     <span>Temperature</span>
                     <input

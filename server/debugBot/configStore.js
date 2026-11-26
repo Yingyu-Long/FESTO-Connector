@@ -1,6 +1,18 @@
 import { query as defaultQuery } from "../database.js";
 
 export const DEBUG_BOT_CONFIG_ID = "default";
+export const DEBUG_BOT_THINK_LEVELS = ["off", "low", "medium", "high"];
+
+export function normalizeThinkLevel(value, fallback = "medium") {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (DEBUG_BOT_THINK_LEVELS.includes(normalized)) return normalized;
+  if (["none", "false", "0", "disabled", "nothink", "no-think"].includes(normalized)) {
+    return "off";
+  }
+  return DEBUG_BOT_THINK_LEVELS.includes(fallback) ? fallback : "medium";
+}
 
 export const DEBUG_BOT_PROVIDER_PRESETS = [
   {
@@ -134,6 +146,10 @@ export function getEnvDebugBotDefaults(env = process.env) {
     maxToolSteps: Math.round(
       clampNumber(env.DEBUG_BOT_MAX_TOOL_STEPS ?? env.HERMES_MAX_TOOL_STEPS, 8, 1, 16),
     ),
+    thinkLevel: normalizeThinkLevel(
+      env.DEBUG_BOT_THINK_LEVEL ?? env.HERMES_THINK_LEVEL,
+      "medium",
+    ),
     systemPrompt: String(env.DEBUG_BOT_SYSTEM_PROMPT || env.HERMES_SYSTEM_PROMPT || "").trim(),
   };
 }
@@ -166,6 +182,7 @@ export function normalizeDebugBotConfig(input, previous = null, env = process.en
     model: String(input?.model ?? defaults.model ?? "").trim(),
     temperature: clampNumber(input?.temperature, defaults.temperature ?? 0.2, 0, 2),
     maxToolSteps: Math.round(clampNumber(input?.maxToolSteps, defaults.maxToolSteps ?? 8, 1, 16)),
+    thinkLevel: normalizeThinkLevel(input?.thinkLevel, defaults.thinkLevel ?? "medium"),
     systemPrompt: String(input?.systemPrompt ?? defaults.systemPrompt ?? "").trim(),
   };
 }
@@ -187,6 +204,7 @@ export function maskDebugBotConfigForClient(config, source = "env") {
     model: config.model,
     temperature: config.temperature,
     maxToolSteps: config.maxToolSteps,
+    thinkLevel: normalizeThinkLevel(config.thinkLevel, "medium"),
     systemPrompt: config.systemPrompt || "",
     hasApiKey,
     apiKeyMasked: maskApiKey(config.apiKey),

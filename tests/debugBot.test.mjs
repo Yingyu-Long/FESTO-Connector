@@ -611,3 +611,136 @@ test("Debug Bot distinguishes non-fresh cylinder causes: READ_FAILED, DATA_UNCHA
   assert.equal(downPoller.cylinders[0].nonFreshReason, "READ_FAILED");
   assert.match(downPoller.cylinders[0].reasonDetail, /Timed out/);
 });
+
+test("Debug Bot supports thinkLevel (off/low/medium/high), extracts <think> reasoning, and falls back when provider rejects thinking params", async () => {
+  const queryFn = async () => ({ rows: [], rowCount: 0 });
+  const capturedBodies = [];
+
+  // 1. Ollama qwen3 in No-Think mode -> sends think: false, reasoning_effort: "none", and /no_think
+  const ollamaNoThinkFetch = async (_url, init) => {
+    capturedBodies.push(JSON.parse(init.body));
+    return new Response(
+      JSON.stringify({
+        model: "qwen3:8b",
+        choices: [{ message: { role: "assistant", content: "Direct concise answer." } }],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  const noThinkRes = await runDebugBotChat({
+    messages: [{ role: "user", content: "Status?" }],
+    language: "en",
+    thinkLevel: "off",
+    config: {
+      provider: "ollama",
+      apiFormat: "openai",
+      baseUrl: "http://host.docker.internal:11434/v1",
+      apiKey: "",
+      model: "qwen3:8b",
+      temperature: 0.2,
+      maxToolSteps: 4,
+      systemPrompt: "",
+    },
+    context: { queryFn },
+    fetchFn: ollamaNoThinkFetch,
+  });
+
+  assert.equal(noThinkRes.thinkLevel, "off");
+  assert.equal(noThinkRes.reply, "Direct concise answer.");
+  assert.equal(capturedBodies[0].think, false);
+  assert.equal(capturedBodies[0].reasoning_effort, "none");
+  assert.match(capturedBodies[0].messages[0].content, /\/no_think/);
+
+  // 2. High think level + inline <think> extraction + fallback when endpoint rejects reasoning_effort
+  const fallbackBodies = [];
+  let attempt = 0;
+  const fallbackFetch = async (_url, init) => {
+    attempt++;
+    fallbackBodies.push(JSON.parse(init.body));
+    if (attempt === 1) {
+      return new Response(
+        JSON.stringify({ error: { message: "Unknown parameter: 'reasoning_effort'" } }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        model: "custom-model",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "<think>Checking cylinder timestamps carefully.</think>\nAll 66 cylinders are healthy.",
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  const highRes = await runDebugBotChat({
+    messages: [{ role: "user", content: "Inspect cylinders" }],
+    language: "en",
+    thinkLevel: "high",
+    config: {
+      provider: "openai",
+      apiFormat: "openai",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "sk-test",
+      model: "custom-model",
+      temperature: 0.2,
+      maxToolSteps: 4,
+      systemPrompt: "",
+    },
+    context: { queryFn },
+    fetchFn: fallbackFetch,
+  });
+
+  assert.equal(attempt, 2);
+  assert.equal(fallbackBodies[0].reasoning_effort, "high");
+  assert.equal("reasoning_effort" in fallbackBodies[1], false);
+  assert.equal(highRes.reasoning, "Checking cylinder timestamps carefully.");
+  assert.equal(highRes.reply, "All 66 cylinders are healthy.");
+
+  // 3. Anthropic thinking budget mapping
+  const anthropicBodies = [];
+  const anthropicFetch = async (_url, init) => {
+    anthropicBodies.push(JSON.parse(init.body));
+    return new Response(
+      JSON.stringify({
+        model: "claude-sonnet-4",
+        content: [
+          { type: "thinking", thinking: "Step-by-step analysis" },
+          { type: "text", text: "Diagnosis ready." },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  const claudeRes = await runDebugBotChat({
+    messages: [{ role: "user", content: "Check broker" }],
+    language: "en",
+    thinkLevel: "low",
+    config: {
+      provider: "anthropic",
+      apiFormat: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+      apiKey: "sk-ant-test",
+      model: "claude-sonnet-4",
+      temperature: 0.2,
+      maxToolSteps: 4,
+      systemPrompt: "",
+    },
+    context: { queryFn },
+    fetchFn: anthropicFetch,
+  });
+
+  assert.deepEqual(anthropicBodies[0].thinking, { type: "enabled", budget_tokens: 1024 });
+  assert.equal(anthropicBodies[0].max_tokens, 3072);
+  assert.equal("temperature" in anthropicBodies[0], false);
+  assert.equal(claudeRes.reasoning, "Step-by-step analysis");
+  assert.equal(claudeRes.reply, "Diagnosis ready.");
+});

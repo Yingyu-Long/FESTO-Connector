@@ -1,4 +1,5 @@
 import { query as defaultQuery } from "../database.js";
+import { normalizeThinkLevel } from "./configStore.js";
 import {
   diagnoseMqttBrokerBacklog,
   diagnoseOpcuaAndSiemens,
@@ -256,7 +257,15 @@ export async function executeDebugBotTool(toolName, args = {}, context = {}) {
   }
 }
 
-function buildSystemPrompt(language = "zh", customPrompt = "") {
+function buildSystemPrompt(language = "zh", customPrompt = "", thinkLevel = "medium", modelName = "") {
+  const isQwen3 = /qwen3/i.test(String(modelName ?? ""));
+  const thinkGuidance =
+    thinkLevel === "off"
+      ? `\n- No-think mode is enabled: respond directly and concisely after tool execution without emitting chain-of-thought or <think> tags.${isQwen3 ? " /no_think" : ""}`
+      : thinkLevel === "high"
+        ? "\n- High thinking mode is enabled: thoroughly analyze all tool outputs, cross-check anomalies, and verify root causes before concluding."
+        : "";
+
   const basePrompt = `You are Debug Bot, the embedded industrial PLC & MQTT diagnostics assistant inside FESTO Connector.
 You have live, read-only diagnostic skills covering the full Connector pipeline:
 1. subscribe_connector_mqtt: Subscribe to the configured MQTT broker & topics for live payload sampling, publish throughput, and 6-timestamp cylinder cycle verification (t1..t4 durations).
@@ -279,11 +288,67 @@ Guidelines:
 - Always call relevant tools to verify live facts before answering; never fabricate PLC statuses, register values, or MQTT messages.
 - When doing a full health check, combine validate_connector_configuration, test_plc_and_mqtt_connectivity, inspect_modbus_datablocks, and subscribe_connector_mqtt.
 - Be clear, structured, and actionable. Use Markdown headings, bullet points, or compact tables.
-- Respond in ${language === "zh" ? "Chinese (简体中文)" : "English"} unless the user writes in another language.`;
+- Respond in ${language === "zh" ? "Chinese (简体中文)" : "English"} unless the user writes in another language.${thinkGuidance}`;
 
   return customPrompt
     ? `${basePrompt}\n\nAdditional customer instructions:\n${customPrompt}`
     : basePrompt;
+}
+
+const THINK_BUDGET_BY_LEVEL = {
+  low: 1024,
+  medium: 4096,
+  high: 8192,
+};
+
+function buildOpenAiThinkingParams(config, thinkLevel) {
+  const lowerUrl = String(config.baseUrl ?? "").toLowerCase();
+  const provider = String(config.provider ?? "").toLowerCase();
+
+  if (provider === "ollama" || lowerUrl.includes("11434")) {
+    return thinkLevel === "off"
+      ? { think: false, reasoning_effort: "none" }
+      : { think: true, reasoning_effort: thinkLevel };
+  }
+  if (provider === "qwen" || lowerUrl.includes("dashscope")) {
+    return thinkLevel === "off"
+      ? { enable_thinking: false }
+      : { enable_thinking: true, thinking_budget: THINK_BUDGET_BY_LEVEL[thinkLevel] ?? 4096 };
+  }
+  if (provider === "deepseek" || lowerUrl.includes("deepseek")) {
+    return thinkLevel === "off"
+      ? { thinking: { type: "disabled" } }
+      : { thinking: { type: "enabled" } };
+  }
+  const isLocalCustom =
+    provider === "custom" ||
+    lowerUrl.includes("localhost") ||
+    lowerUrl.includes("127.0.0.1") ||
+    lowerUrl.includes("host.docker.internal");
+  if (thinkLevel === "off") {
+    return isLocalCustom ? { think: false, reasoning_effort: "none" } : { reasoning_effort: "none" };
+  }
+  return { reasoning_effort: thinkLevel };
+}
+
+function isUnsupportedThinkingParamError(status, message) {
+  if (![400, 422].includes(status)) return false;
+  return /reasoning_effort|enable_thinking|thinking_budget|\bthinking\b|\bthink\b|unknown parameter|unrecognized|extra_forbidden|additional properties/i.test(
+    String(message ?? ""),
+  );
+}
+
+function extractInlineThinkBlocks(rawText) {
+  const text = String(rawText ?? "");
+  const thoughtParts = [];
+  const cleaned = text
+    .replace(/<think>([\s\S]*?)<\/think>/gi, (_match, inner) => {
+      const trimmed = String(inner ?? "").trim();
+      if (trimmed) thoughtParts.push(trimmed);
+      return "";
+    })
+    .trim();
+  return { cleaned, thoughts: thoughtParts.join("\n\n") };
 }
 
 function truncateToolOutputForModel(payload, maxChars = 16000) {
@@ -303,7 +368,7 @@ function parseToolArgs(rawArgs) {
   }
 }
 
-async function runOpenAiToolLoop({ messages, config, systemPrompt, context, fetchFn }) {
+async function runOpenAiToolLoop({ messages, config, systemPrompt, thinkLevel, context, fetchFn }) {
   const tools = DEBUG_BOT_TOOLS.map((t) => ({
     type: "function",
     function: {
@@ -328,21 +393,41 @@ async function runOpenAiToolLoop({ messages, config, systemPrompt, context, fetc
 
   const toolCallsTrace = [];
   const totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const reasoningParts = [];
+  let includeThinkingParams = true;
 
   for (let step = 0; step < config.maxToolSteps; step++) {
-    const response = await fetchFn(`${config.baseUrl}/chat/completions`, {
+    const baseBody = {
+      model: config.model,
+      temperature: config.temperature,
+      messages: conversation,
+      tools,
+      tool_choice: "auto",
+    };
+    const thinkingParams = includeThinkingParams
+      ? buildOpenAiThinkingParams(config, thinkLevel)
+      : {};
+
+    let response = await fetchFn(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        model: config.model,
-        temperature: config.temperature,
-        messages: conversation,
-        tools,
-        tool_choice: "auto",
-      }),
+      body: JSON.stringify({ ...baseBody, ...thinkingParams }),
     });
+    let data = await response.json().catch(() => ({}));
 
-    const data = await response.json().catch(() => ({}));
+    if (!response.ok && includeThinkingParams && Object.keys(thinkingParams).length > 0) {
+      const errMsg = data?.error?.message || data?.message || "";
+      if (isUnsupportedThinkingParamError(response.status, errMsg)) {
+        includeThinkingParams = false;
+        response = await fetchFn(`${config.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(baseBody),
+        });
+        data = await response.json().catch(() => ({}));
+      }
+    }
+
     if (!response.ok) {
       const message =
         data?.error?.message || data?.message || `LLM API error (HTTP ${response.status})`;
@@ -360,10 +445,26 @@ async function runOpenAiToolLoop({ messages, config, systemPrompt, context, fetc
       throw Object.assign(new Error("LLM returned an empty response."), { status: 502 });
     }
 
+    const rawReasoning =
+      typeof assistantMsg.reasoning_content === "string"
+        ? assistantMsg.reasoning_content.trim()
+        : typeof assistantMsg.reasoning === "string"
+          ? assistantMsg.reasoning.trim()
+          : "";
+    if (rawReasoning) reasoningParts.push(rawReasoning);
+
+    const { cleaned: cleanedContent, thoughts: inlineThoughts } = extractInlineThinkBlocks(
+      assistantMsg.content ?? "",
+    );
+    if (inlineThoughts) reasoningParts.push(inlineThoughts);
+
     const toolCalls = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls : [];
     if (toolCalls.length === 0) {
+      const combinedReasoning = reasoningParts.join("\n\n").trim();
       return {
-        reply: String(assistantMsg.content ?? "").trim(),
+        reply: cleanedContent,
+        ...(combinedReasoning ? { reasoning: combinedReasoning } : {}),
+        thinkLevel,
         model: data.model || config.model,
         toolCalls: toolCallsTrace,
         usage: totalUsage,
@@ -373,6 +474,9 @@ async function runOpenAiToolLoop({ messages, config, systemPrompt, context, fetc
     conversation.push({
       role: "assistant",
       content: assistantMsg.content ?? null,
+      ...(typeof assistantMsg.reasoning_content === "string"
+        ? { reasoning_content: assistantMsg.reasoning_content }
+        : {}),
       tool_calls: toolCalls,
     });
 
@@ -391,16 +495,19 @@ async function runOpenAiToolLoop({ messages, config, systemPrompt, context, fetc
     }
   }
 
+  const combinedReasoning = reasoningParts.join("\n\n").trim();
   return {
     reply:
       "Reached the maximum tool execution steps. Please review the tool execution trace above or increase Max Tool Steps in Model Settings.",
+    ...(combinedReasoning ? { reasoning: combinedReasoning } : {}),
+    thinkLevel,
     model: config.model,
     toolCalls: toolCallsTrace,
     usage: totalUsage,
   };
 }
 
-async function runAnthropicToolLoop({ messages, config, systemPrompt, context, fetchFn }) {
+async function runAnthropicToolLoop({ messages, config, systemPrompt, thinkLevel, context, fetchFn }) {
   const tools = DEBUG_BOT_TOOLS.map((t) => ({
     name: t.name,
     description: t.description,
@@ -420,22 +527,50 @@ async function runAnthropicToolLoop({ messages, config, systemPrompt, context, f
 
   const toolCallsTrace = [];
   const totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const reasoningParts = [];
+  let includeThinkingParams = thinkLevel !== "off";
 
   for (let step = 0; step < config.maxToolSteps; step++) {
-    const response = await fetchFn(`${config.baseUrl}/messages`, {
+    const budgetTokens = THINK_BUDGET_BY_LEVEL[thinkLevel] ?? 4096;
+    const baseBody = {
+      model: config.model,
+      max_tokens: 2048,
+      temperature: config.temperature,
+      system: systemPrompt,
+      messages: conversation,
+      tools,
+    };
+    const requestBody = includeThinkingParams
+      ? {
+          model: config.model,
+          max_tokens: budgetTokens + 2048,
+          system: systemPrompt,
+          messages: conversation,
+          tools,
+          thinking: { type: "enabled", budget_tokens: budgetTokens },
+        }
+      : baseBody;
+
+    let response = await fetchFn(`${config.baseUrl}/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        model: config.model,
-        max_tokens: 2048,
-        temperature: config.temperature,
-        system: systemPrompt,
-        messages: conversation,
-        tools,
-      }),
+      body: JSON.stringify(requestBody),
     });
+    let data = await response.json().catch(() => ({}));
 
-    const data = await response.json().catch(() => ({}));
+    if (!response.ok && includeThinkingParams) {
+      const errMsg = data?.error?.message || data?.message || "";
+      if (isUnsupportedThinkingParamError(response.status, errMsg)) {
+        includeThinkingParams = false;
+        response = await fetchFn(`${config.baseUrl}/messages`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(baseBody),
+        });
+        data = await response.json().catch(() => ({}));
+      }
+    }
+
     if (!response.ok) {
       const message =
         data?.error?.message || data?.message || `Anthropic API error (HTTP ${response.status})`;
@@ -451,6 +586,11 @@ async function runAnthropicToolLoop({ messages, config, systemPrompt, context, f
     }
 
     const blocks = Array.isArray(data.content) ? data.content : [];
+    for (const block of blocks) {
+      if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
+        reasoningParts.push(block.thinking.trim());
+      }
+    }
     const toolUses = blocks.filter((b) => b?.type === "tool_use");
 
     if (toolUses.length === 0) {
@@ -459,8 +599,11 @@ async function runAnthropicToolLoop({ messages, config, systemPrompt, context, f
         .map((b) => b.text)
         .join("\n")
         .trim();
+      const combinedReasoning = reasoningParts.join("\n\n").trim();
       return {
         reply: text,
+        ...(combinedReasoning ? { reasoning: combinedReasoning } : {}),
+        thinkLevel,
         model: data.model || config.model,
         toolCalls: toolCallsTrace,
         usage: totalUsage,
@@ -485,9 +628,12 @@ async function runAnthropicToolLoop({ messages, config, systemPrompt, context, f
     conversation.push({ role: "user", content: toolResults });
   }
 
+  const combinedReasoning = reasoningParts.join("\n\n").trim();
   return {
     reply:
       "Reached the maximum tool execution steps. Please review the tool execution trace above or increase Max Tool Steps in Model Settings.",
+    ...(combinedReasoning ? { reasoning: combinedReasoning } : {}),
+    thinkLevel,
     model: config.model,
     toolCalls: toolCallsTrace,
     usage: totalUsage,
@@ -497,6 +643,7 @@ async function runAnthropicToolLoop({ messages, config, systemPrompt, context, f
 export async function runDebugBotChat({
   messages,
   language = "zh",
+  thinkLevel,
   config,
   context = {},
   fetchFn = fetch,
@@ -514,9 +661,32 @@ export async function runDebugBotChat({
     );
   }
 
-  const systemPrompt = buildSystemPrompt(language, config.systemPrompt);
+  const effectiveThinkLevel = normalizeThinkLevel(
+    thinkLevel ?? config.thinkLevel,
+    "medium",
+  );
+  const systemPrompt = buildSystemPrompt(
+    language,
+    config.systemPrompt,
+    effectiveThinkLevel,
+    config.model,
+  );
   if (config.apiFormat === "anthropic") {
-    return runAnthropicToolLoop({ messages, config, systemPrompt, context, fetchFn });
+    return runAnthropicToolLoop({
+      messages,
+      config,
+      systemPrompt,
+      thinkLevel: effectiveThinkLevel,
+      context,
+      fetchFn,
+    });
   }
-  return runOpenAiToolLoop({ messages, config, systemPrompt, context, fetchFn });
+  return runOpenAiToolLoop({
+    messages,
+    config,
+    systemPrompt,
+    thinkLevel: effectiveThinkLevel,
+    context,
+    fetchFn,
+  });
 }

@@ -525,6 +525,7 @@ app.post("/api/debug-bot/chat", async (request, response) => {
     const result = await runDebugBotChat({
       messages: body.messages,
       language: body.language === "en" ? "en" : "zh",
+      thinkLevel: body.thinkLevel,
       config,
       context: { queryFn: query },
     });
