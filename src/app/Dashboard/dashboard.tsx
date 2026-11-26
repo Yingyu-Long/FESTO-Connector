@@ -570,7 +570,7 @@ export default function Dashboard() {
           </section>
         )}
       </main>
-      <AppFooter onVersionClick={() => notify("Festo AX Connector v3.1")} />
+      <AppFooter onVersionClick={() => notify("Festo AX Connector v3.2")} />
       {notice && (
         <div className="fwe-snackbar" role="status">
           {notice}

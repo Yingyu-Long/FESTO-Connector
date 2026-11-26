@@ -122,13 +122,14 @@ export function getEnvDebugBotDefaults(env = process.env) {
     }
   }
 
+  const hasEnvModelConfig = Boolean(providerRaw || baseUrlRaw || modelRaw || apiKeyRaw);
   const preset = presetById(provider);
   return {
     provider: preset.id,
     apiFormat: preset.apiFormat,
-    baseUrl: normalizeBaseUrl(baseUrlRaw, preset.defaultBaseUrl),
+    baseUrl: hasEnvModelConfig ? normalizeBaseUrl(baseUrlRaw, preset.defaultBaseUrl) : "",
     apiKey: apiKeyRaw,
-    model: modelRaw || preset.defaultModel,
+    model: hasEnvModelConfig ? modelRaw || preset.defaultModel : "",
     temperature: clampNumber(env.DEBUG_BOT_TEMPERATURE ?? env.HERMES_TEMPERATURE, 0.2, 0, 2),
     maxToolSteps: Math.round(
       clampNumber(env.DEBUG_BOT_MAX_TOOL_STEPS ?? env.HERMES_MAX_TOOL_STEPS, 8, 1, 16),
@@ -160,10 +161,9 @@ export function normalizeDebugBotConfig(input, previous = null, env = process.en
   return {
     provider: preset.id,
     apiFormat,
-    baseUrl: normalizeBaseUrl(input?.baseUrl ?? defaults.baseUrl, preset.defaultBaseUrl),
+    baseUrl: normalizeBaseUrl(input?.baseUrl ?? defaults.baseUrl, ""),
     apiKey,
-    model:
-      String(input?.model ?? defaults.model ?? preset.defaultModel).trim() || preset.defaultModel,
+    model: String(input?.model ?? defaults.model ?? "").trim(),
     temperature: clampNumber(input?.temperature, defaults.temperature ?? 0.2, 0, 2),
     maxToolSteps: Math.round(clampNumber(input?.maxToolSteps, defaults.maxToolSteps ?? 8, 1, 16)),
     systemPrompt: String(input?.systemPrompt ?? defaults.systemPrompt ?? "").trim(),
@@ -191,7 +191,7 @@ export function maskDebugBotConfigForClient(config, source = "env") {
     hasApiKey,
     apiKeyMasked: maskApiKey(config.apiKey),
     requiresApiKey: preset.requiresApiKey,
-    configured: hasApiKey || !preset.requiresApiKey,
+    configured: Boolean(config.baseUrl && config.model && (hasApiKey || !preset.requiresApiKey)),
     source,
   };
 }
@@ -260,6 +260,11 @@ export async function testDebugBotLlmConnection(
   const config = normalizeDebugBotConfig(rawInput ?? {}, current, env);
   const preset = presetById(config.provider);
 
+  if (!config.baseUrl || !config.model) {
+    throw Object.assign(new Error("Base URL and Model are required."), {
+      status: 400,
+    });
+  }
   if (preset.requiresApiKey && !config.apiKey) {
     throw Object.assign(new Error("API Key is required for the selected model provider."), {
       status: 400,

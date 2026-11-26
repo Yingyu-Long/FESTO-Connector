@@ -247,7 +247,7 @@ export function UnifiedAppShell({ children }: { children: ReactNode }) {
         {/* Unified Application Footer */}
         <footer className="unified-app-footer">
           <div className="unified-app-footer-links">
-            <span>Version 3.1</span>
+            <span>Version 3.2</span>
           </div>
         </footer>
       </div>

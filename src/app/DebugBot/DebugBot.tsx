@@ -10,21 +10,11 @@ interface DebugBotConfigClient {
   model: string;
   temperature: number;
   maxToolSteps: number;
-  systemPrompt: string;
   hasApiKey: boolean;
   apiKeyMasked: string;
   requiresApiKey: boolean;
   configured: boolean;
   source: "database" | "env";
-}
-
-interface ProviderPreset {
-  id: string;
-  label: string;
-  apiFormat: "openai" | "anthropic";
-  defaultBaseUrl: string;
-  defaultModel: string;
-  requiresApiKey: boolean;
 }
 
 interface DebugBotToolDefinition {
@@ -686,24 +676,32 @@ function ToolTraceCard({ trace, zh }: { trace: ToolCallTrace; zh: boolean }) {
   );
 }
 
+function inferProvider(baseUrl: string, apiFormat: "openai" | "anthropic"): string {
+  const lower = baseUrl.trim().toLowerCase();
+  if (apiFormat === "anthropic" || lower.includes("anthropic")) return "anthropic";
+  if (lower.includes("deepseek")) return "deepseek";
+  if (lower.includes("dashscope")) return "qwen";
+  if (lower.includes("openrouter")) return "openrouter";
+  if (lower.includes("11434")) return "ollama";
+  if (lower.includes("127.0.0.1") || lower.includes("localhost")) return "custom";
+  return "openai";
+}
+
 export default function DebugBot() {
   const { language, debugBotView: activeView, setDebugBotView: setActiveView } = useAppShell();
   const zh = language === "zh";
 
   const [config, setConfig] = useState<DebugBotConfigClient | null>(null);
-  const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [tools, setTools] = useState<DebugBotToolDefinition[]>([]);
   const [loadError, setLoadError] = useState("");
 
   // Settings form state
-  const [provider, setProvider] = useState("deepseek");
   const [apiFormat, setApiFormat] = useState<"openai" | "anthropic">("openai");
-  const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
+  const [baseUrl, setBaseUrl] = useState("");
   const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [model, setModel] = useState("deepseek-chat");
+  const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState("0.2");
   const [maxToolSteps, setMaxToolSteps] = useState("8");
-  const [systemPrompt, setSystemPrompt] = useState("");
   const [savingSettings, setSavingSettings] = useState(false);
   const [testingSettings, setTestingSettings] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<{
@@ -771,18 +769,16 @@ export default function DebugBot() {
       }
       const cfgData = (await cfgRes.json()) as {
         config: DebugBotConfigClient;
-        presets: ProviderPreset[];
       };
       const toolsData = (await toolsRes.json()) as { tools: DebugBotToolDefinition[] };
+      const hasExplicitConfig =
+        cfgData.config.source === "database" || cfgData.config.configured;
       setConfig(cfgData.config);
-      setPresets(cfgData.presets ?? []);
-      setProvider(cfgData.config.provider);
       setApiFormat(cfgData.config.apiFormat);
-      setBaseUrl(cfgData.config.baseUrl);
-      setModel(cfgData.config.model);
+      setBaseUrl(hasExplicitConfig ? cfgData.config.baseUrl : "");
+      setModel(hasExplicitConfig ? cfgData.config.model : "");
       setTemperature(String(cfgData.config.temperature ?? 0.2));
       setMaxToolSteps(String(cfgData.config.maxToolSteps ?? 8));
-      setSystemPrompt(cfgData.config.systemPrompt ?? "");
       setTools(toolsData.tools ?? []);
     } catch {
       setLoadError(
@@ -818,14 +814,6 @@ export default function DebugBot() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
-  const selectPreset = (preset: ProviderPreset) => {
-    setProvider(preset.id);
-    setApiFormat(preset.apiFormat);
-    setBaseUrl(preset.defaultBaseUrl);
-    setModel(preset.defaultModel);
-    setSettingsNotice(null);
-  };
-
   async function handleSaveSettings(event: FormEvent) {
     event.preventDefault();
     setSavingSettings(true);
@@ -835,14 +823,13 @@ export default function DebugBot() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider,
+          provider: inferProvider(baseUrl, apiFormat),
           apiFormat,
           baseUrl,
           ...(apiKeyDraft.trim() ? { apiKey: apiKeyDraft.trim() } : {}),
           model,
           temperature: Number(temperature),
           maxToolSteps: Number(maxToolSteps),
-          systemPrompt,
         }),
       });
       const data = (await res.json()) as {
@@ -857,9 +844,7 @@ export default function DebugBot() {
       setApiKeyDraft("");
       setSettingsNotice({
         type: "ok",
-        text: zh
-          ? "配置已保存到 PostgreSQL 并立即生效。"
-          : "Configuration saved to PostgreSQL and activated.",
+        text: zh ? "已保存" : "Saved",
       });
     } catch (err) {
       setSettingsNotice({
@@ -886,7 +871,7 @@ export default function DebugBot() {
       setApiKeyDraft("");
       setSettingsNotice({
         type: "ok",
-        text: zh ? "已清除保存的 API Key。" : "Saved API key cleared.",
+        text: zh ? "已清除 API Key" : "API key cleared",
       });
     } catch (err) {
       setSettingsNotice({
@@ -906,7 +891,7 @@ export default function DebugBot() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider,
+          provider: inferProvider(baseUrl, apiFormat),
           apiFormat,
           baseUrl,
           ...(apiKeyDraft.trim() ? { apiKey: apiKeyDraft.trim() } : {}),
@@ -1117,29 +1102,25 @@ export default function DebugBot() {
     ? [
         {
           icon: "clock",
-          label: "检测气缸数据更新时长",
-          hint: "排查长时间未更新或从未更新的气缸",
+          label: "气缸更新监测",
           prompt:
             "请检查所有运行中的 Modbus 气缸 Datablock，列出每个气缸多久没有更新数据，重点标出长时间未更新或从未更新的气缸。",
         },
         {
           icon: "layers",
-          label: "诊断 MQTT Broker 堆积",
-          hint: "检查 $SYS 队列、发送背压与环回延迟",
+          label: "Broker 堆积诊断",
           prompt:
             "请诊断当前 MQTT Broker 是否存在消息堆积或发送背压，检查 $SYS 队列、丢包、离线持久会话、Connector PUBACK 延迟及环回延迟并给出排查建议。",
         },
         {
           icon: "radio",
-          label: "MQTT 推流与特征时间校验",
-          hint: "采样 3 秒核查 6 个时间戳与 t1~t4",
+          label: "MQTT 推流采样",
           prompt:
             "请体检当前 Connector 的 PLC 配置，并订阅已配置的 MQTT Topic 采样 3 秒，核查气缸 6 个时间戳与 4 个特征时间是否全部正常。",
         },
         {
           icon: "shield",
-          label: "配置体检与运行日志排查",
-          hint: "检查地址边界、轮询耗时与后端告警",
+          label: "配置与日志体检",
           prompt:
             "请执行配置体检（检查地址越界、FC03 分批耗时与轮询周期匹配度、重复 Topic）并查看 PostgreSQL、内存和近期后端报错事件。",
         },
@@ -1147,29 +1128,25 @@ export default function DebugBot() {
     : [
         {
           icon: "clock",
-          label: "Check Cylinder Freshness",
-          hint: "Find stale or never-updated datablocks",
+          label: "Cylinder freshness",
           prompt:
             "Inspect all active Modbus cylinder datablocks and report how long each cylinder has gone without updating data, highlighting any stale or never-updated cylinders.",
         },
         {
           icon: "layers",
-          label: "Diagnose Broker Backlog",
-          hint: "Inspect $SYS queue, backpressure & RTT",
+          label: "Broker backlog",
           prompt:
             "Check whether MQTT messages are piling up at the Broker by inspecting $SYS queue/dropped/offline-session metrics, Connector PUBACK backpressure, and loopback latency.",
         },
         {
           icon: "radio",
-          label: "Sample Live MQTT Stream",
-          hint: "Verify 6 timestamps & t1..t4 durations",
+          label: "Sample MQTT stream",
           prompt:
             "Validate saved Connector PLC & MQTT configurations and subscribe to configured MQTT topics for 3 seconds to verify 6-timestamp cylinder cycles and t1..t4 durations.",
         },
         {
           icon: "shield",
-          label: "Audit Config & Runtime Health",
-          hint: "Check bounds, poll timing & backend logs",
+          label: "Config & health audit",
           prompt:
             "Validate the saved Connector configuration (register bounds, FC03 batch timing, duplicate topics) and inspect PostgreSQL health, uptime, and recent backend diagnostic errors.",
         },
@@ -1305,61 +1282,48 @@ export default function DebugBot() {
       {/* VIEW 1: AI CHAT */}
       {activeView === "chat" && (
         <div className="dbot-chat-card">
-          <div className="dbot-chat-topbar">
-            <button
-              type="button"
-              className="dbot-chat-skill-pill"
-              onClick={() => setActiveView("settings")}
-              title={zh ? "查看已挂载的诊断技能" : "View registered diagnostic skills"}
-            >
-              <i />
-              <span>
-                {tools.length > 0
-                  ? zh
-                    ? `${tools.length} 个诊断技能已就绪`
-                    : `${tools.length} diagnostic skills ready`
-                  : zh
-                    ? "Connector 诊断技能"
-                    : "Connector skills"}
-              </span>
-            </button>
-            {messages.length > 0 && (
-              <button
-                type="button"
-                className="dbot-ghost-btn"
-                onClick={() => setMessages([])}
-                disabled={sending}
-              >
-                <Icon name="trash" size={14} />
-                <span>{zh ? "清空对话" : "Clear"}</span>
-              </button>
-            )}
-          </div>
-
-          {config && !config.configured && (
-            <div className="dbot-inline-notice">
-              <span className="dbot-inline-notice-text">
-                {zh
-                  ? "未配置 API Key，配置后可启用 AI 对话；实时巡检工具可直接免 Key 使用。"
-                  : "No API key configured. Set up a model to chat, or use Quick Diagnostics directly."}
-              </span>
-              <div className="dbot-inline-notice-links">
+          {(messages.length > 0 || (config && !config.configured)) && (
+            <div className="dbot-chat-topbar">
+              {config && !config.configured ? (
+                <div className="dbot-chat-notice-inline">
+                  <span>{zh ? "未配置 API Key" : "API key not configured"}</span>
+                  <button
+                    type="button"
+                    className="dbot-text-link is-strong"
+                    onClick={() => setActiveView("settings")}
+                  >
+                    {zh ? "去配置" : "Configure"}
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  className="dbot-text-link"
-                  onClick={() => setActiveView("diagnostics")}
-                >
-                  {zh ? "实时巡检" : "Quick Diagnostics"}
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  className="dbot-text-link is-strong"
+                  className="dbot-chat-skill-pill"
                   onClick={() => setActiveView("settings")}
                 >
-                  {zh ? "去配置" : "Configure"}
+                  <i />
+                  <span>
+                    {tools.length > 0
+                      ? zh
+                        ? `${tools.length} 个技能`
+                        : `${tools.length} skills`
+                      : zh
+                        ? "诊断技能"
+                        : "Skills"}
+                  </span>
                 </button>
-              </div>
+              )}
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  className="dbot-ghost-btn"
+                  onClick={() => setMessages([])}
+                  disabled={sending}
+                >
+                  <Icon name="trash" size={14} />
+                  <span>{zh ? "清空" : "Clear"}</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -1367,14 +1331,9 @@ export default function DebugBot() {
             {messages.length === 0 ? (
               <div className="dbot-empty-state">
                 <div className="dbot-empty-icon">
-                  <Icon name="bot" size={22} />
+                  <Icon name="bot" size={20} />
                 </div>
-                <h3>{zh ? "Connector 智能排障" : "Connector Diagnostics"}</h3>
-                <p>
-                  {zh
-                    ? "输入现场问题或选择下方快捷项，自动调用诊断技能检查气缸数据、Broker 堆积与配置状态。"
-                    : "Describe a PLC or MQTT issue, or pick a quick check to inspect cylinders, broker backlog, and config health."}
-                </p>
+                <h3>{zh ? "有什么可以帮你排查？" : "How can I help?"}</h3>
                 <div className="dbot-quick-prompts">
                   {quickPrompts.map((item) => (
                     <button
@@ -1387,10 +1346,7 @@ export default function DebugBot() {
                       <span className="dbot-prompt-icon">
                         <Icon name={item.icon} size={15} />
                       </span>
-                      <span className="dbot-prompt-copy">
-                        <strong>{item.label}</strong>
-                        <small>{item.hint}</small>
-                      </span>
+                      <span className="dbot-prompt-title">{item.label}</span>
                       <Icon name="arrow-right" size={14} className="dbot-prompt-arrow" />
                     </button>
                   ))}
@@ -1427,11 +1383,7 @@ export default function DebugBot() {
                   <div className="dbot-msg-row is-assistant">
                     <div className="dbot-msg-bubble is-thinking">
                       <Icon name="spinner" size={15} />
-                      <span>
-                        {zh
-                          ? "正在调用诊断技能分析实时数据…"
-                          : "Running diagnostic skills on live data…"}
-                      </span>
+                      <span>{zh ? "分析中…" : "Analyzing…"}</span>
                     </div>
                   </div>
                 )}
@@ -1449,7 +1401,7 @@ export default function DebugBot() {
               }}
             >
               <textarea
-                rows={2}
+                rows={1}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1458,18 +1410,14 @@ export default function DebugBot() {
                     void sendMessage();
                   }
                 }}
-                placeholder={
-                  zh
-                    ? "输入排查问题，例如：哪些气缸超过 5 分钟没更新？或 Broker 是否堆积…"
-                    : "Ask Debug Bot to check stale cylinders, broker backlog, or sample live MQTT…"
-                }
+                placeholder={zh ? "输入排查问题…" : "Ask Debug Bot…"}
                 disabled={sending}
               />
               <button
                 type="submit"
                 className="dbot-send-btn"
                 disabled={sending || !input.trim()}
-                aria-label={zh ? "发送消息" : "Send message"}
+                aria-label={zh ? "发送" : "Send"}
               >
                 <Icon name={sending ? "spinner" : "send"} size={15} />
                 <span>{zh ? "发送" : "Send"}</span>
@@ -2643,64 +2591,50 @@ export default function DebugBot() {
       {activeView === "settings" && (
         <div className="dbot-settings-grid">
           <form className="dbot-panel" onSubmit={handleSaveSettings}>
-            <div className="dbot-panel-head">
+            <div className="dbot-panel-head dbot-settings-head">
               <div className="dbot-panel-title-block">
-                <h2>{zh ? "模型与 API Key 配置" : "Model & API Key"}</h2>
-                <p>
-                  {zh
-                    ? "配置持久化保存在 PostgreSQL，保存后立即生效。"
-                    : "Persisted in PostgreSQL and applied immediately."}
-                </p>
-              </div>
-            </div>
-
-            <div className="dbot-setting-section">
-              <div className="dbot-section-label">{zh ? "服务商预设" : "Provider Preset"}</div>
-              <div className="dbot-preset-pills">
-                {presets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className={`dbot-preset-pill ${provider === preset.id ? "is-selected" : ""}`}
-                    onClick={() => selectPreset(preset)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
+                <h2>{zh ? "模型配置" : "Model Settings"}</h2>
               </div>
             </div>
 
             <div className="dbot-form-grid">
               <label className="dbot-field">
-                <span>Base URL</span>
-                <input
-                  type="text"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.deepseek.com"
-                  required
-                />
+                <span>{zh ? "接口协议" : "API Format"}</span>
+                <select
+                  value={apiFormat}
+                  onChange={(e) => setApiFormat(e.target.value as "openai" | "anthropic")}
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
               </label>
 
               <label className="dbot-field">
-                <span>{zh ? "模型名称 (Model)" : "Model Name"}</span>
+                <span>{zh ? "模型名称" : "Model"}</span>
                 <input
                   type="text"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder="deepseek-chat / gpt-4o / qwen2.5:14b"
                   required
                 />
               </label>
             </div>
 
             <label className="dbot-field dbot-field-full">
+              <span>Base URL</span>
+              <input
+                type="text"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                required
+              />
+            </label>
+
+            <label className="dbot-field dbot-field-full">
               <span className="dbot-field-label-row">
                 <span>API Key</span>
                 {config?.hasApiKey && (
-                  <em className="dbot-saved-key-tag">
-                    {zh ? "已保存" : "Saved"}: {config.apiKeyMasked}
-                  </em>
+                  <em className="dbot-saved-key-tag">{config.apiKeyMasked}</em>
                 )}
               </span>
               <div className="dbot-key-row">
@@ -2708,13 +2642,6 @@ export default function DebugBot() {
                   type="password"
                   value={apiKeyDraft}
                   onChange={(e) => setApiKeyDraft(e.target.value)}
-                  placeholder={
-                    config?.hasApiKey
-                      ? zh
-                        ? "留空保持现有 Key，或输入新 Key 覆盖"
-                        : "Leave blank to keep saved key, or enter new key"
-                      : "sk-..."
-                  }
                   autoComplete="off"
                 />
                 {config?.hasApiKey && (
@@ -2732,25 +2659,13 @@ export default function DebugBot() {
 
             <details className="dbot-advanced-box">
               <summary>
-                <span>{zh ? "高级参数与系统提示词" : "Advanced Options & System Prompt"}</span>
+                <span>{zh ? "高级参数" : "Advanced"}</span>
                 <span className="dbot-advanced-meta">
-                  {apiFormat === "openai" ? "OpenAI" : "Anthropic"} · T={temperature} ·{" "}
-                  {maxToolSteps} {zh ? "步" : "steps"}
+                  T={temperature} · {maxToolSteps} {zh ? "步" : "steps"}
                 </span>
               </summary>
               <div className="dbot-advanced-body">
-                <div className="dbot-form-grid-3">
-                  <label className="dbot-field">
-                    <span>{zh ? "接口协议" : "API Format"}</span>
-                    <select
-                      value={apiFormat}
-                      onChange={(e) => setApiFormat(e.target.value as "openai" | "anthropic")}
-                    >
-                      <option value="openai">OpenAI (/chat/completions)</option>
-                      <option value="anthropic">Anthropic (/messages)</option>
-                    </select>
-                  </label>
-
+                <div className="dbot-form-grid dbot-form-grid-tight">
                   <label className="dbot-field">
                     <span>Temperature</span>
                     <input
@@ -2774,24 +2689,6 @@ export default function DebugBot() {
                     />
                   </label>
                 </div>
-
-                <label className="dbot-field">
-                  <span>
-                    {zh
-                      ? "附加系统提示词（可选）"
-                      : "Additional System Instructions (Optional)"}
-                  </span>
-                  <textarea
-                    rows={3}
-                    value={systemPrompt}
-                    onChange={(e) => setSystemPrompt(e.target.value)}
-                    placeholder={
-                      zh
-                        ? "例如：重点关注 1 号产线超过 5 分钟未更新的气缸，报告中附带对应 MQTT Topic…"
-                        : "Optional site-specific diagnostic rules for Debug Bot…"
-                    }
-                  />
-                </label>
               </div>
             </details>
 
@@ -2810,11 +2707,11 @@ export default function DebugBot() {
                 onClick={() => void handleTestConnection()}
               >
                 <Icon name={testingSettings ? "spinner" : "activity"} size={14} />
-                {zh ? "测试连接" : "Test Connection"}
+                {zh ? "测试连接" : "Test"}
               </button>
               <button type="submit" className="dbot-btn-primary" disabled={savingSettings}>
                 <Icon name={savingSettings ? "spinner" : "check"} size={14} />
-                {zh ? "保存配置" : "Save Settings"}
+                {zh ? "保存" : "Save"}
               </button>
             </div>
           </form>
@@ -2824,7 +2721,7 @@ export default function DebugBot() {
             <div className="dbot-panel-head dbot-skills-head">
               <div className="dbot-panel-title-inline">
                 <Icon name="wrench" size={16} />
-                <h2>{zh ? "已挂载诊断技能" : "Registered Skills"}</h2>
+                <h2>{zh ? "诊断技能" : "Skills"}</h2>
               </div>
               <span className="dbot-count-badge">{tools.length}</span>
             </div>
